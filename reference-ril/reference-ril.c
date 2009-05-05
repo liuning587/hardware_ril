@@ -33,6 +33,7 @@
 #include <getopt.h>
 #include <sys/socket.h>
 #include <cutils/sockets.h>
+#include <cutils/properties.h>
 #include <termios.h>
 #include <sys/system_properties.h>
 
@@ -45,7 +46,12 @@
 #define MAX_AT_RESPONSE 0x1000
 
 /* pathname returned from RIL_REQUEST_SETUP_DATA_CALL / RIL_REQUEST_SETUP_DEFAULT_PDP */
-#define PPP_TTY_PATH "eth0"
+#define PPP_TTY_PATH "ppp0"
+#define PPP_OPERSTATE_PATH "/sys/class/net/ppp0/operstate"
+#define SERVICE_PPPD_GPRS "pppd_gprs"
+#define PROPERTY_PPPD_EXIT_CODE "net.gprs.ppp-exit"
+#define POLL_PPP_SYSFS_SECONDS	3
+#define POLL_PPP_SYSFS_RETRY	3
 
 #ifdef USE_TI_COMMANDS
 
@@ -198,7 +204,15 @@ static pthread_cond_t s_state_cond = PTHREAD_COND_INITIALIZER;
 
 static int s_port = -1;
 static const char * s_device_path = NULL;
+#ifdef HAVE_DATA_DEVICE
+static const char * s_data_device_path = NULL;
+#endif
 static int          s_device_socket = 0;
+
+#ifdef HUAWEI_MODEM
+// flag for pppd status. 1: started; 0: stoped 
+static int pppd = 0;
+#endif
 
 /* trigger change to this with s_state_cond */
 static int s_closed = 0;
@@ -1620,6 +1634,11 @@ static void requestSetupDataCall(void *data, size_t datalen, RIL_Token t)
     char *cmd;
     int err;
     ATResponse *p_response = NULL;
+#ifndef HUAWEI_MODEM
+    char *response[2] = { "1", PPP_TTY_PATH };
+#else
+    char *response[3] = { "1", PPP_TTY_PATH, ""};
+#endif
 
     apn = ((const char **)data)[2];
 
@@ -1631,6 +1650,7 @@ static void requestSetupDataCall(void *data, size_t datalen, RIL_Token t)
     err = at_send_command("AT%DATA=2,\"UART\",1,,\"SER\",\"UART\",0", NULL);
 #endif /* USE_TI_COMMANDS */
 
+#ifndef HUAWEI_MODEM
     int fd, qmistatus;
     size_t cur = 0;
     size_t len;
@@ -1725,12 +1745,118 @@ static void requestSetupDataCall(void *data, size_t datalen, RIL_Token t)
             goto error;
         }
     }
+#else
+    int fd;
+    char buffer[20];
+    char exit_code[PROPERTY_VALUE_MAX];
+    static char local_ip[PROPERTY_VALUE_MAX];
+    int retry = POLL_PPP_SYSFS_RETRY;
+
+    if(pppd) {
+	// clean up any existing PPP connection before activating new PDP context
+	LOGW("Stop existing PPPd before activating PDP");
+	property_set("ctl.stop", SERVICE_PPPD_GPRS);
+	pppd = 0;
+    }
+
+    LOGD("requesting data connection to APN '%s'", apn);
+
+    asprintf(&cmd, "AT+CGDCONT=1,\"IP\",\"%s\",,0,0", apn);
+    err = at_send_command(cmd, NULL);
+    free(cmd);
+
+    // Set required QoS params to default
+    err = at_send_command("AT+CGQREQ=1", NULL);
+
+    // Set minimum QoS params to default
+    err = at_send_command("AT+CGQMIN=1", NULL);
+
+    // packet-domain event reporting
+    err = at_send_command("AT+CGEREP=1,0", NULL);
+
+    // Hangup anything that's happening there now
+    err = at_send_command("AT+CGACT=0,1", NULL);
+
+    // Start data on PDP context 1
+    err = at_send_command("ATD*99***1#", &p_response);
+
+    if (err < 0 || p_response->success == 0) {
+        goto error;
+    }
+
+    // Setup PPP connection after PDP Context activated successfully
+    // The ppp service name is specified in /init.rc
+    property_set(PROPERTY_PPPD_EXIT_CODE, "");
+    property_set("net.ppp0.local-ip", "");
+    err = property_set("ctl.start", SERVICE_PPPD_GPRS);
+    pppd = 1;
+    if (err < 0) {
+	LOGW("Can not start PPPd");
+	goto ppp_error;
+    }
+    LOGD("PPPd started");
+
+    // Wait for PPP interface ready
+    sleep(1);
+    do {
+	// Check whether PPPD exit abnormally
+	property_get(PROPERTY_PPPD_EXIT_CODE, exit_code, "");
+	if(strcmp(exit_code, "") != 0) {
+	    LOGW("PPPd exit with code %s", exit_code);
+	    retry = 0;
+	    break;
+        }
+
+        fd  = open(PPP_OPERSTATE_PATH, O_RDONLY);
+        if (fd >= 0)  {
+	    buffer[0] = 0;
+            read(fd, buffer, sizeof(buffer));
+	    close(fd);
+	    if(!strncmp(buffer, "up", strlen("up")) || !strncmp(buffer, "unknown", strlen("unknown"))) {
+		// Should already get local IP address from PPP link after IPCP negotation 
+		// system property net.ppp0.local-ip is created by PPPD in "ip-up" script 
+                local_ip[0] = 0;
+		property_get("net.ppp0.local-ip", local_ip, "");
+		if(!strcmp(local_ip, "")) {
+		    LOGW("PPP link is up but no local IP is assigned. Will retry %d times after %d seconds", \
+			  retry, POLL_PPP_SYSFS_SECONDS);
+		} else {
+		    LOGD("PPP link is up with local IP address %s", local_ip);
+		    // other info like dns will be passed to framework via property (set in ip-up script)
+		    response[2] = local_ip;  
+		    // now we think PPPd is ready
+		    break;	
+		}
+	    } else {
+		LOGW("PPP link status in %s is %s. Will retry %d times after %d seconds", \
+		    PPP_OPERSTATE_PATH, buffer, retry, POLL_PPP_SYSFS_SECONDS);
+	    }
+	} else {
+    	    LOGW("Can not detect PPP state in %s. Will retry %d times after %d seconds", \
+		  PPP_OPERSTATE_PATH, retry-1, POLL_PPP_SYSFS_SECONDS);
+	}
+        sleep(POLL_PPP_SYSFS_SECONDS);
+    } while (--retry);
+
+    if(retry == 0)
+	goto ppp_error;
+#endif
 
     requestOrSendDataCallList(&t);
 
     at_response_free(p_response);
 
     return;
+
+ppp_error:
+    /* PDP activated successfully, but PPP connection can't be setup. So deactivate PDP context */
+    at_send_command("AT+CGACT=0,1", NULL);
+    /* If PPPd is already launched, stop it */
+    if(pppd) {
+	property_set("ctl.stop", SERVICE_PPPD_GPRS);
+	pppd = 0;
+    }
+    // fall through
 error:
     RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
     at_response_free(p_response);
@@ -3214,7 +3340,11 @@ static void onATTimeout()
 static void usage(char *s)
 {
 #ifdef RIL_SHLIB
+#ifdef HAVE_DATA_DEVICE
+    fprintf(stderr, "reference-ril requires: -p <tcp port> or -d /dev/tty_device -u /dev/data_device\n");
+#else
     fprintf(stderr, "reference-ril requires: -p <tcp port> or -d /dev/tty_device\n");
+#endif
 #else
     fprintf(stderr, "usage: %s [-p <tcp port>] [-d /dev/tty_device]\n", s);
     exit(-1);
@@ -3226,6 +3356,12 @@ mainLoop(void *param)
 {
     int fd;
     int ret;
+#ifdef HAVE_DATA_DEVICE
+    struct stat dummy;
+#endif
+#ifdef HUAWEI_MODEM
+    struct termios new_termios, old_termios;
+#endif
 
     AT_DUMP("== ", "entering mainLoop()", -1 );
     at_set_on_reader_closed(onATReaderClosed);
@@ -3234,6 +3370,17 @@ mainLoop(void *param)
     for (;;) {
         fd = -1;
         while  (fd < 0) {
+#ifdef HAVE_DATA_DEVICE
+	    /* If the modem have two channel, e.g. UART for AT command and USB for data,
+	       we check the data channel firstly (e.g. /dev/ttyUSB0) so that after AT handshake
+	       we can make sure the data channel is ready.
+	    */
+	    if(stat(s_data_device_path, &dummy)) {
+                LOGE ("opening data channel device - %s. retrying...", s_data_device_path);
+                sleep(10);
+		continue;
+	    }
+#endif
             if (s_port > 0) {
                 fd = socket_loopback_client(s_port, SOCK_STREAM);
             } else if (s_device_socket) {
@@ -3277,11 +3424,27 @@ mainLoop(void *param)
             }
 
             if (fd < 0) {
-                perror ("opening AT interface. retrying...");
+                LOGE ("opening AT interface. retrying...");
                 sleep(10);
                 /* never returns */
             }
         }
+
+#ifdef HUAWEI_MODEM
+        /* Set UART parameters (e.g. Buad rate) for connecting with HUAWEI modem */
+        tcgetattr(fd, &old_termios);
+	new_termios = old_termios;
+	new_termios.c_lflag &= ~(ICANON | ECHO | ISIG);
+	new_termios.c_cflag |= (CREAD | CLOCAL);
+	new_termios.c_cflag &= ~(CSTOPB | PARENB | CRTSCTS);
+	new_termios.c_cflag &= ~(CBAUD | CSIZE) ;
+	new_termios.c_cflag |= (B115200 | CS8);
+	ret = tcsetattr(fd, TCSANOW, &new_termios);
+	if(ret < 0) {
+            LOGE ("Fail to set UART parameters. tcsetattr return %d \n", ret);
+            return 0;
+	}
+#endif
 
         s_closed = 0;
         ret = at_open(fd, onUnsolicited);
@@ -3315,7 +3478,11 @@ const RIL_RadioFunctions *RIL_Init(const struct RIL_Env *env, int argc, char **a
 
     s_rilenv = env;
 
+#ifdef HAVE_DATA_DEVICE
+    while ( -1 != (opt = getopt(argc, argv, "p:d:u:s:"))) {
+#else
     while ( -1 != (opt = getopt(argc, argv, "p:d:s:"))) {
+#endif
         switch (opt) {
             case 'p':
                 s_port = atoi(optarg);
@@ -3330,6 +3497,13 @@ const RIL_RadioFunctions *RIL_Init(const struct RIL_Env *env, int argc, char **a
                 s_device_path = optarg;
                 RLOGI("Opening tty device %s\n", s_device_path);
             break;
+
+#ifdef HAVE_DATA_DEVICE
+	   /* e.g. /dev/ttyUSB0 for seperate data channel */
+	    case 'u':
+		s_data_device_path = optarg;
+	    break;
+#endif
 
             case 's':
                 s_device_path   = optarg;
@@ -3353,6 +3527,14 @@ const RIL_RadioFunctions *RIL_Init(const struct RIL_Env *env, int argc, char **a
         RLOGE("Unable to alloc memory for ModemInfo");
         return NULL;
     }
+
+#ifdef HAVE_DATA_DEVICE
+    if (s_data_device_path == NULL) {
+        usage(argv[0]);
+        return NULL;
+    }
+#endif
+
     pthread_attr_init (&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     ret = pthread_create(&s_tid_mainloop, &attr, mainLoop, NULL);
