@@ -372,7 +372,8 @@ static void onSIMReady()
      * ds = 1   // Status reports routed to TE
      * bfr = 1  // flush buffer
      */
-    at_send_command("AT+CNMI=1,2,2,1,1", NULL);
+at_send_command("AT+CNMI=1,2,2,1,1", NULL);
+at_send_command("AT+CPMS=\"ME\",\"ME\",\"ME\"",NULL);
 }
 
 static void requestRadioPower(void *data, size_t datalen, RIL_Token t)
