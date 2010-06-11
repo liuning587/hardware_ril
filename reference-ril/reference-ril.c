@@ -374,6 +374,7 @@ static void onSIMReady()
      */
 at_send_command("AT+CNMI=1,2,2,1,1", NULL);
 at_send_command("AT+CPMS=\"ME\",\"ME\",\"ME\"",NULL);
+at_send_command("AT+CMGD=1,4",NULL);
 }
 
 static void requestRadioPower(void *data, size_t datalen, RIL_Token t)
