@@ -212,10 +212,8 @@ static const char * s_data_device_path = NULL;
 #endif
 static int          s_device_socket = 0;
 
-#ifdef HUAWEI_MODEM
 // flag for pppd status. 1: started; 0: stoped 
 static int pppd = 0;
-#endif
 
 /* trigger change to this with s_state_cond */
 static int s_closed = 0;
@@ -388,7 +386,11 @@ static void requestRadioPower(void *data, size_t datalen, RIL_Token t)
     onOff = ((int *)data)[0];
 
     if (onOff == 0 && sState != RADIO_STATE_OFF) {
-        err = at_send_command("AT+CFUN=0", &p_response);
+#ifdef USE_AMAZONE_MODEM
+        err = at_send_command("AT+CFUN=4", &p_response);
+#else
+	err = at_send_command("AT+CFUN=0", &p_response);
+#endif
        if (err < 0 || p_response->success == 0) goto error;
         setRadioState(RADIO_STATE_OFF);
     } else if (onOff > 0 && sState == RADIO_STATE_OFF) {
@@ -1807,6 +1809,7 @@ static void requestSetupDataCall(void *data, size_t datalen, RIL_Token t)
     // packet-domain event reporting
     err = at_send_command("AT+CGEREP=1,0", NULL);
 
+#ifndef USE_AMAZONE_MODEM
     // Hangup anything that's happening there now
     err = at_send_command("AT+CGACT=0,1", NULL);
 
@@ -1816,7 +1819,12 @@ static void requestSetupDataCall(void *data, size_t datalen, RIL_Token t)
     if (err < 0 || p_response->success == 0) {
         goto error;
     }
-
+#else
+    #
+    if (err < 0) {
+	    goto error;
+    }
+#endif
     // Setup PPP connection after PDP Context activated successfully
     // The ppp service name is specified in /init.rc
     property_set(PROPERTY_PPPD_EXIT_CODE, "");
@@ -1830,7 +1838,11 @@ static void requestSetupDataCall(void *data, size_t datalen, RIL_Token t)
     LOGD("PPPd started");
 
     // Wait for PPP interface ready
+#ifdef USE_AMAZONE_MODEM
+    sleep(2);
+#else
     sleep(1);
+#endif
     do {
 	// Check whether PPPD exit abnormally
 	property_get(PROPERTY_PPPD_EXIT_CODE, exit_code, "");
@@ -3395,11 +3407,9 @@ mainLoop(void *param)
 #ifdef HAVE_DATA_DEVICE
     struct stat dummy;
 #endif
-#ifdef HUAWEI_MODEM
     struct termios new_termios, old_termios;
     char delay_init[PROPERTY_VALUE_MAX];
     int delay;
-#endif
 
     AT_DUMP("== ", "entering mainLoop()", -1 );
     at_set_on_reader_closed(onATReaderClosed);
