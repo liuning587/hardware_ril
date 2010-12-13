@@ -11,6 +11,7 @@ LOCAL_SRC_FILES:= \
     reference-ril.c \
     atchannel.c \
     misc.c \
+    runtime_port.c \
     at_tok.c
 
 LOCAL_SHARED_LIBRARIES := \
@@ -23,14 +24,6 @@ LOCAL_C_INCLUDES := $(KERNEL_HEADERS)
 
 ifeq ($(BOARD_MODEM_HAVE_DATA_DEVICE),true)
   LOCAL_CFLAGS += -DHAVE_DATA_DEVICE
-endif
-
-ifeq ($(BOARD_MODEM_VENDOR),HUAWEI)
-  LOCAL_CFLAGS += -DHUAWEI_MODEM
-endif
-
-ifeq ($(BOARD_MODEM_VENDOR),AMAZON)
-  LOCAL_CFLAGS += -DUSE_AMAZONE_MODEM -DHUAWEI_MODEM
 endif
 
 ifeq ($(TARGET_DEVICE),sooner)
