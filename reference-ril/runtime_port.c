@@ -84,6 +84,14 @@ static struct modem_3g_device modem_3g_device_table[] = {
 		.deviceport	= "/dev/ttyACM3",
 		.dataport	= "/dev/ttyACM0",
 		.type		= AMAZON_MODEM,
+	},
+	{
+		.name		= "InnoComm-Amazon1",
+		.idVendor	= "1519",
+		.idProduct	= "0020",
+		.deviceport	= "/dev/ttyACM3",
+		.dataport	= "/dev/ttyACM0",
+		.type		= AMAZON_MODEM,
 	}
 };
 

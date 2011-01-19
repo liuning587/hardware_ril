@@ -1671,14 +1671,7 @@ static void requestSetupDataCall(void *data, size_t datalen, RIL_Token t)
     char *cmd;
     int err;
     ATResponse *p_response = NULL;
-    char *response2[2] = { "1", PPP_TTY_PATH };
-    char *response3[3] = { "1", PPP_TTY_PATH, ""};
-    char **response;
-
-    if (current_modem_type == HUAWEI_MODEM)
-	    response = response3;
-    else
-	    response = response2;
+    char *response[3] = { "1", PPP_TTY_PATH, ""};
 
     apn = ((const char **)data)[2];
 
