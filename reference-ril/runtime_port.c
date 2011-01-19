@@ -33,6 +33,12 @@
 
 int current_modem_type = UNKNOWN_MODEM;
 
+#define FAKE_PORT "/dev/ttyFAKEPort"
+/* Rild need a fake port to pass continue init job,
+ * return a fake port make it runable.
+ * Or the system will enter 15s in early suspend.
+ */
+
 struct modem_3g_device {
 	const char *idVendor;
 	const char *idProduct;
@@ -195,7 +201,7 @@ const char *runtime_3g_port_device(void)
 
 	device = find_matched_device();
 	if (device == NULL)
-		return NULL;
+		return FAKE_PORT;
 
 	/* Set gobal modem type. */
 	current_modem_type = device->type;
@@ -211,7 +217,7 @@ const char *runtime_3g_port_data(void)
 
 	device = find_matched_device();
 	if (device == NULL)
-		return NULL;
+		return FAKE_PORT;
 	return device->dataport;
 }
 
