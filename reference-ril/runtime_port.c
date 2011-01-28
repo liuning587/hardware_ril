@@ -1,5 +1,5 @@
 /*
- *   Copyright 2011 Freescale Semiconductor, Inc. All Rights Reserved.
+ *   Copyright (C) 2011 Freescale Semiconductor, Inc. All Rights Reserved.
  */
 /*
  * Licensed under the Apache License, Version 2.0 (the "License");
