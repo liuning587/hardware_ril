@@ -3506,9 +3506,12 @@ mainLoop(void *param)
 	    LOGW ("Should not delay RIL init too long (%d seconds). Please set %s properly", delay, RIL_DELAY_TIME);
             delay = 0;
         }
-        TIMEVAL_DELAYINIT.tv_sec = delay;
+	if (current_modem_type == HUAWEI_MODEM) {
+		TIMEVAL_DELAYINIT.tv_sec = delay;
+		LOGD ("Will delay RIL initialization for %d seconds", TIMEVAL_DELAYINIT.tv_sec); 
+	} else			/* Found other modem don't need delay */
+		TIMEVAL_DELAYINIT.tv_sec = 0;
 
-        LOGD ("Will delay RIL initialization for %d seconds", TIMEVAL_DELAYINIT.tv_sec); 
 
         RIL_requestTimedCallback(initializeCallback, NULL, &TIMEVAL_DELAYINIT);
 
