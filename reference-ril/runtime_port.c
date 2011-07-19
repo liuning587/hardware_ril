@@ -64,6 +64,14 @@ static struct modem_3g_device modem_3g_device_table[] = {
 		.type		= HUAWEI_MODEM,
 	},
 	{
+		.name		= "Huawei-EM770W",
+		.idVendor	= "12d1",
+		.idProduct	= "1404",
+		.deviceport	= "/dev/ttyUSB2",
+		.dataport	= "/dev/ttyUSB0",
+		.type		= HUAWEI_MODEM,
+	},
+	{
 		.name		= "Huawei-E180",
 		.idVendor	= "12d1",
 		.idProduct	= "1003",
