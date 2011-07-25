@@ -2128,6 +2128,29 @@ static void requestSetCellInfoListRate(void *data, size_t datalen, RIL_Token t)
     RIL_onRequestComplete(t, RIL_E_SUCCESS, NULL, 0);
 }
 
+static void  requestBasebandVersion(void *data, size_t datalen, RIL_Token t)
+{
+    ATResponse   *p_response = NULL;
+    int           err;
+    char *response = { "UNKNOWN"};
+    char *line;
+
+    err = at_send_command_numeric("AT+CGMR", &p_response);
+
+    if (err < 0 || p_response->success == 0) {
+        RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
+    } else {
+        line = p_response->p_intermediates->line;
+        if(line != NULL) {
+            RIL_onRequestComplete(t, RIL_E_SUCCESS, line, sizeof(line));
+        }
+        else{
+            RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
+        }
+    }
+    at_response_free(p_response);
+}
+
 /*** Callback methods from the RIL library to us ***/
 
 /**
@@ -2525,6 +2548,21 @@ onRequest (int request, void *data, size_t datalen, RIL_Token t)
                 requestExitEmergencyMode(data, datalen, t);
                 break;
             } // Fall-through if tech is not cdma
+
+        case RIL_REQUEST_GET_CELL_INFO_LIST:
+            requestGetCellInfoList(data, datalen, t);
+            break;
+
+        case RIL_REQUEST_SET_UNSOL_CELL_INFO_LIST_RATE:
+            requestSetCellInfoListRate(data, datalen, t);
+            break;
+
+        case RIL_REQUEST_BASEBAND_VERSION:
+            if (current_modem_type == HUAWEI_MODEM)
+                requestBasebandVersion(data, datalen, t);
+            else
+                RIL_onRequestComplete(t, RIL_E_REQUEST_NOT_SUPPORTED, NULL, 0);
+            break;
 
         default:
             RLOGD("Request not supported. Tech: %d",TECH(sMdmInfo));
