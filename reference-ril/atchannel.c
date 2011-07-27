@@ -291,7 +291,17 @@ static void processLine(const char *line)
             if (strStartsWith (line, s_responsePrefix)) {
                 addIntermediate(line);
             } else {
-                handleUnsolicited(line);
+                //handle the case of read sms
+                //<CR><LF>+CMGR:
+                //<stat>,[<reserved>],<length><CR><LF><pdu><CR><LF><C
+                //R><LF>OK<CR><LF>
+                if(!strcmp(s_responsePrefix,"+CMGR:")&& sp_response->p_intermediates && sp_response->p_intermediates->line ) {
+                    addIntermediate(line);
+                }
+                else{
+                    handleUnsolicited(line);
+                }
+                
             }
         break;
 
