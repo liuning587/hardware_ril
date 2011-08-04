@@ -57,8 +57,9 @@
 #define PPP_OPERSTATE_PATH "/sys/class/net/ppp0/operstate"
 #define SERVICE_PPPD_GPRS "pppd_gprs"
 #define PROPERTY_PPPD_EXIT_CODE "net.gprs.ppp-exit"
-#define POLL_PPP_SYSFS_SECONDS	3
-#define POLL_PPP_SYSFS_RETRY	3
+// Max wait time to 2*10 secondes for ppp enable
+#define POLL_PPP_SYSFS_SECONDS 2
+#define POLL_PPP_SYSFS_RETRY   10
 
 #ifdef USE_TI_COMMANDS
 
