@@ -1984,7 +1984,7 @@ static void requestSetupDataCall(void *data, size_t datalen, RIL_Token t)
 	    if(!strncmp(buffer, "up", strlen("up")) || !strncmp(buffer, "unknown", strlen("unknown"))) {
 		// Should already get local IP address from PPP link after IPCP negotation 
 		// system property net.ppp0.local-ip is created by PPPD in "ip-up" script 
-                local_ip[0] = 0;
+        local_ip[0] = 0;
 		property_get("net.ppp0.local-ip", local_ip, "");
 		if(!strcmp(local_ip, "")) {
 		    LOGW("PPP link is up but no local IP is assigned. Will retry %d times after %d seconds", \
@@ -1992,6 +1992,7 @@ static void requestSetupDataCall(void *data, size_t datalen, RIL_Token t)
 		} else {
 		    LOGD("PPP link is up with local IP address %s", local_ip);
 		    // other info like dns will be passed to framework via property (set in ip-up script)
+            response[1] = "ppp0";
 		    response[2] = local_ip;  
 		    // now we think PPPd is ready
 		    break;	
