@@ -537,8 +537,8 @@ static void requestDataCallList(void *data, size_t datalen, RIL_Token t)
 
 void onDeactiveDataCallList()
 {
-    RIL_Data_Call_Response *responses =
-        alloca(sizeof(RIL_Data_Call_Response));
+    RIL_Data_Call_Response_v4 *responses =
+        alloca(sizeof(RIL_Data_Call_Response_v4));
     LOGI("onDeactiveDataCallList");
     //For n pdp context, or just one pdp context?
     //Always cid =1 ?
@@ -556,7 +556,7 @@ void onDeactiveDataCallList()
 
     RIL_onUnsolicitedResponse(RIL_UNSOL_DATA_CALL_LIST_CHANGED,
                                   responses,
-                                  sizeof(RIL_Data_Call_Response));
+                                  sizeof(RIL_Data_Call_Response_v4));
 }
 
 static void requestOrSendDataCallList(RIL_Token *t)
@@ -2010,8 +2010,7 @@ static void requestSetupDataCall(void *data, size_t datalen, RIL_Token t)
 
     if(retry == 0)
 	goto ppp_error;
-#endif
-
+    }
     requestOrSendDataCallList(&t);
     at_response_free(p_response);
 
