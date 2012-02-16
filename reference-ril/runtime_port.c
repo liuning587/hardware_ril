@@ -1,7 +1,4 @@
 /*
- *   Copyright (C) 2011 Freescale Semiconductor, Inc. All Rights Reserved.
- */
-/*
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,6 +11,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2011-2012 Freescale Semiconductor, Inc. All Rights Reserved.
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -52,7 +54,7 @@ struct modem_3g_device {
 
 #define PATH_SIZE 1024
 #define ARRAY_SIZE(a) (sizeof(a)/sizeof(a[0]))
-static const char *USB_DIR_BASE = "/sys/class/usb_device/";
+static const char *USB_DIR_BASE = "/sys/bus/usb/devices/";
 
 static struct modem_3g_device modem_3g_device_table[] = {
 	{
@@ -206,8 +208,8 @@ struct modem_3g_device *find_matched_device(void)
 		path = strcpy(path, USB_DIR_BASE);
 		path = strcat(path, dent->d_name);
 		strcpy(path2, path);
-		path = strcat(path, "/device/idVendor");
-		path2 = strcat(path2, "/device/idProduct");
+		path = strcat(path, "/idVendor");
+		path2 = strcat(path2, "/idProduct");
 
 		ret = readfile(path, idvendor, 4);
 		if (ret <= 0)
@@ -234,7 +236,6 @@ out:
 const char *runtime_3g_port_device(void)
 {
 	struct modem_3g_device *device;
-
 	device = find_matched_device();
 	if (device == NULL)
 		return FAKE_PORT;
