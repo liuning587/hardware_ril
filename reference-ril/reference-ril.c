@@ -14,7 +14,7 @@
 ** See the License for the specific language governing permissions and
 ** limitations under the License.
 */
-/* Copyright (C) 2011 Freescale Semiconductor,Inc. */
+/* Copyright (C) 2011-2012 Freescale Semiconductor, Inc. */
 
 #include <telephony/ril_cdma_sms.h>
 #include <telephony/librilutils.h>
@@ -719,7 +719,20 @@ static void requestOrSendDataCallList(RIL_Token *t)
                 /* I don't know where we are, so use the public Google DNS
                  * servers by default and no gateway.
                  */
-                responses[i].dnses = "8.8.8.8 8.8.4.4";
+                //responses[i].dnses = "8.8.8.8 8.8.4.4";
+                //responses[i].gateways = "";
+                const char* separator = " ";
+                const int   dnslist_sz = 128;
+                char*       dnslist = alloca(dnslist_sz);
+                char  propName[PROP_NAME_MAX];
+                memset(dnslist, 0, 128);
+                property_get("net.ppp0.dns1", propName, "8.8.8.8");
+                strlcat(dnslist, propValue, dnslist_sz);
+                strlcat(dnslist, separator, dnslist_sz);
+                property_get("net.ppp0.dns2", propName, "8.8.4.4");
+                strlcat(dnslist, propValue, dnslist_sz);
+
+                responses[i].dnses = dnslist;
                 responses[i].gateways = "";
             }
         }
