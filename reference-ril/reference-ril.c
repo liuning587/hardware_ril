@@ -3712,22 +3712,9 @@ mainLoop(void *param)
             return 0;
         }
 
-        /* Some HUAWEI USB datacards (e.g. E180) bootup and attach to network a little bit slowly(e.g. 20s). 
-           Delay RIL init so that we can always get correct network status (i.e. +COPS?).
-           FIX ME: this should be removed in future. Service layer should be responsible to handle "late" attach.
-        */
-        property_get(RIL_DELAY_TIME, delay_init, "0");
-        delay = strtol(delay_init, NULL, 10);
-        if(delay > 120) {
-            LOGW ("Should not delay RIL init too long (%d seconds). Please set %s properly", delay, RIL_DELAY_TIME);
-            delay = 0;
-        }
-        if (current_modem_type == HUAWEI_MODEM) {
-            TIMEVAL_DELAYINIT.tv_sec = delay;
-            LOGD ("Will delay RIL initialization for %d seconds", TIMEVAL_DELAYINIT.tv_sec); 
-        } else			/* Found other modem don't need delay */
-            TIMEVAL_DELAYINIT.tv_sec = 0;
-
+        //RIL framework can handle the modem not response on AT+COPS in time
+        //So remove the delay here
+        TIMEVAL_DELAYINIT.tv_sec = 0;
 
         RIL_requestTimedCallback(initializeCallback, NULL, &TIMEVAL_DELAYINIT);
 
