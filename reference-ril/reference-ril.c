@@ -1678,6 +1678,35 @@ static void requestOperator(void *data, size_t datalen, RIL_Token t)
         goto error;
     }
 
+    //Workaround for 770w with below response
+    //+COPS: 0,0,"FFFFFFFFFFFFFFFF",2
+    //+COPS: 0,1,"FFFFFFFFFFFFFFFF",2
+    //+COPS: 0,2,"46001",2
+    //"China Unicom","UNICOM","46001"
+    //"China Mobile Com","CMCC","46000"
+    //"China Mobile Com","CMCC","46002"
+    //"China Mobile Com","CMCC","46007"
+    char *invalid_operator = "FFFFFFFFFFFFFFFF";
+    if (response[0] && response[2] &&
+        !strncmp(response[0], invalid_operator, strlen(invalid_operator))) {
+        //Set the long operator name based on mcc/mnc
+        if (!strncmp(response[2], "46001", 5))
+            strcpy(response[0], "China Unicom");
+        if (!strncmp(response[2], "46000", 5)||
+           !strncmp(response[2], "46002", 5)||
+           !strncmp(response[2], "46007", 5))
+            strcpy(response[0], "China Mobile Com");
+    }
+    if (response[1] && response[2] &&
+        !strncmp(response[1], invalid_operator, strlen(invalid_operator))) {
+        //Set the long operator name based on mcc/mnc
+        if (!strncmp(response[2], "46001", 5))
+            strcpy(response[1], "UNICOM");
+        if (!strncmp(response[2], "46000", 5)||
+           !strncmp(response[2], "46002", 5)||
+           !strncmp(response[2], "46007", 5))
+            strcpy(response[1], "CMCC");
+    }
     RIL_onRequestComplete(t, RIL_E_SUCCESS, response, sizeof(response));
     at_response_free(p_response);
 
