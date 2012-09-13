@@ -46,6 +46,7 @@
 #include <utils/Log.h>
 
 #include <runtime/runtime.h>
+#include "fcp_parser.h"
 
 #define MAX_AT_RESPONSE 0x1000
 
@@ -173,6 +174,12 @@ typedef enum {
     RUIM_PUK = 10,
     RUIM_NETWORK_PERSONALIZATION = 11
 } SIM_Status;
+
+typedef enum {
+    UICC_TYPE_UNKNOWN,
+    UICC_TYPE_SIM,
+    UICC_TYPE_USIM,
+} UICC_Type;
 
 static void onRequest (int request, void *data, size_t datalen, RIL_Token t);
 static RIL_RadioState currentState();
@@ -2150,6 +2157,130 @@ error:
 
 }
 
+static int convertSimIoFcp(RIL_SIM_IO_Response *sr, char **cvt)
+{
+    int err = 0;
+    size_t fcplen;
+    struct ts_51011_921_resp resp;
+    void *cvt_buf = NULL;
+
+    if (!sr->simResponse || !cvt) {
+        err = -1;
+        goto error;
+    }
+
+    fcplen = strlen(sr->simResponse);
+    if ((fcplen == 0) || (fcplen & 1)) {
+        err = -1;
+        goto error;
+    }
+
+    err = fcp_to_ts_51011(sr->simResponse, fcplen, &resp);
+    if (err < 0){
+        goto error;
+    }
+
+    cvt_buf = malloc(sizeof(resp) * 2 + 1);
+    if (!cvt_buf) {
+        err = -1;
+        goto error;
+    }
+
+    err = binaryToString((unsigned char*)(&resp),
+                   sizeof(resp), cvt_buf);
+    if (err < 0){
+        goto error;
+    }
+
+    /* cvt_buf ownership is moved to the caller */
+    *cvt = cvt_buf;
+    cvt_buf = NULL;
+
+finally:
+    return err;
+
+error:
+    free(cvt_buf);
+    goto finally;
+}
+
+/**
+* Fetch information about UICC card type (SIM/USIM)
+*
+* \return UICC_Type: type of UICC card.
+*/
+static UICC_Type getUICCType()
+{
+    ATResponse *atresponse = NULL;
+    static UICC_Type UiccType = UICC_TYPE_UNKNOWN; /* FIXME: Static variable */
+    int err;
+    int swx;
+    char *line = NULL;
+    char *dir = NULL;
+
+    if (currentState() == RADIO_STATE_OFF ||
+        currentState() == RADIO_STATE_UNAVAILABLE) {
+        UiccType = UICC_TYPE_UNKNOWN;
+        goto exit;
+    }
+
+    /* No need to get type again, it is stored */
+    if (UiccType != UICC_TYPE_UNKNOWN)
+        goto exit;
+
+    /*
+     * For USIM, 'AT+CRSM=192,28480,0,0,15' will respond with TLV tag "62" which indicates
+     * FCP template (refer to ETSI TS 101 220). Currently, USIM detection succeeds on
+     * Innocomm Amazon1901 and Huawei EM770W.
+     */
+    err = at_send_command_singleline("AT+CRSM=192,28480,0,0,15", "+CRSM:", &atresponse);
+
+    if (err != 0 || !atresponse->success)
+        goto error;
+
+    if (atresponse->p_intermediates != NULL) {
+        line = atresponse->p_intermediates->line;
+
+        err = at_tok_start(&line);
+        if (err < 0)
+            goto error;
+
+        err = at_tok_nextint(&line, &swx);
+        if (err < 0)
+            goto error;
+        err = at_tok_nextint(&line, &swx);
+        if (err < 0)
+            goto error;
+
+	if (at_tok_hasmore(&line)) {
+	 	err = at_tok_nextstr(&line, &dir);
+		if (err < 0) goto error;
+	}
+
+        if (strstr(dir, "62") == dir) {
+            UiccType = UICC_TYPE_USIM;
+            LOGI("Detected card type USIM - stored");
+            goto finally;
+        }
+    }
+
+    UiccType = UICC_TYPE_SIM;
+    LOGI("Detected card type SIM - stored");
+    goto finally;
+
+error:
+    UiccType = UICC_TYPE_UNKNOWN;
+    LOGW("%s(): Failed to detect card type - Retry at next request", __func__);
+
+finally:
+    at_response_free(atresponse);
+
+exit:
+    return UiccType;
+}
+
+
+
 static void  requestSIM_IO(void *data, size_t datalen, RIL_Token t)
 {
     ATResponse *p_response = NULL;
@@ -2158,6 +2289,7 @@ static void  requestSIM_IO(void *data, size_t datalen, RIL_Token t)
     char *cmd = NULL;
     RIL_SIM_IO_v6 *p_args;
     char *line;
+    int cvt_done = 0;
 
     memset(&sr, 0, sizeof(sr));
 
@@ -2197,8 +2329,23 @@ static void  requestSIM_IO(void *data, size_t datalen, RIL_Token t)
         if (err < 0) goto error;
     }
 
+/*
+* In case the command is GET_RESPONSE and cardtype is 3G SIM
+* conversion to 2G FCP is required
+*/
+    if (p_args->command == 0xC0 && getUICCType() == UICC_TYPE_USIM) {
+        if (convertSimIoFcp(&sr, &sr.simResponse) < 0) {
+            //rilErrorCode = RIL_E_GENERIC_FAILURE;
+            goto error;
+        }
+        cvt_done = 1; /* sr.simResponse needs to be freed */
+    }
     RIL_onRequestComplete(t, RIL_E_SUCCESS, &sr, sizeof(sr));
     at_response_free(p_response);
+
+    if (cvt_done)
+    free(sr.simResponse);
+
     free(cmd);
 
     return;

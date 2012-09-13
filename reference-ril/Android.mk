@@ -12,6 +12,7 @@ LOCAL_SRC_FILES:= \
     reference-ril.c \
     atchannel.c \
     misc.c \
+    fcp_parser.c \
     at_tok.c
 
 LOCAL_SHARED_LIBRARIES := \
