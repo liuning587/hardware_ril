@@ -13,7 +13,7 @@
  */
 
 /*
- * Copyright 2011-2012 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright 2011-2013 Freescale Semiconductor, Inc. All Rights Reserved.
  */
 
 #include <stdio.h>
@@ -34,6 +34,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include "runtime.h"
+#include "misc.h"
 
 int current_modem_type = UNKNOWN_MODEM;
 

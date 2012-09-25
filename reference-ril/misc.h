@@ -14,6 +14,15 @@
 ** See the License for the specific language governing permissions and
 ** limitations under the License.
 */
+#include <utils/Log.h>
+/* For Jelly Bean, it use ALOG */
+#ifdef ALOGE
+#define LOGE ALOGE
+#define LOGW ALOGW
+#define LOGI ALOGI
+#define LOGD ALOGD
+#endif
+
 
 /** returns 1 if line starts with prefix, 0 if it does not */
 int strStartsWith(const char *line, const char *prefix);
