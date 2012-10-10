@@ -14,6 +14,12 @@
 ** See the License for the specific language governing permissions and
 ** limitations under the License.
 */
+/*
+ * Partly base on the work contributed by
+ * Author: Christian Bejram <christian.bejram@stericsson.com>
+ * Author: Kim Tommy Humborstad <kim.tommy.humborstad@stericsson.com>
+*/
+/* Copyright (C) ST-Ericsson AB 2008-2010 */
 /* Copyright (C) 2011-2013 Freescale Semiconductor, Inc. */
 
 #include <telephony/ril_cdma_sms.h>
@@ -173,7 +179,22 @@ typedef enum {
     RUIM_READY = 8,
     RUIM_PIN = 9,
     RUIM_PUK = 10,
-    RUIM_NETWORK_PERSONALIZATION = 11
+    RUIM_NETWORK_PERSONALIZATION = 11,
+    SIM_PIN2 = 12, /* SIM PIN2 lock */
+    SIM_PUK2 = 13, /* SIM PUK2 lock */
+    SIM_NETWORK_SUBSET_PERSO = 14, /* Network Subset Personalization */
+    SIM_SERVICE_PROVIDER_PERSO = 15, /* Service Provider Personalization */
+    SIM_CORPORATE_PERSO = 16, /* Corporate Personalization */
+    SIM_SIM_PERSO = 17, /* SIM/USIM Personalization */
+    SIM_STERICSSON_LOCK = 18, /* ST-Ericsson Extended SIM */
+    SIM_BLOCKED = 19, /* SIM card is blocked */
+    SIM_PERM_BLOCKED = 20, /* SIM card is permanently blocked */
+    SIM_NETWORK_PERSO_PUK = 21, /* Network Personalization PUK */
+    SIM_NETWORK_SUBSET_PERSO_PUK = 22, /* Network Subset Perso. PUK */
+    SIM_SERVICE_PROVIDER_PERSO_PUK = 23,/* Service Provider Perso. PUK */
+    SIM_CORPORATE_PERSO_PUK = 24, /* Corporate Personalization PUK */
+    SIM_SIM_PERSO_PUK = 25, /* SIM Personalization PUK (unused) */
+    SIM_PUK2_PERM_BLOCKED = 26 /* PUK2 is permanently blocked */
 } SIM_Status;
 
 typedef enum {
@@ -797,7 +818,7 @@ static void requestQueryNetworkSelectionMode(
     ATResponse *p_response = NULL;
     int response = 0;
     char *line;
-
+	
     err = at_send_command_singleline("AT+COPS?", "+COPS:", &p_response);
 
     if (err < 0 || p_response->success == 0) {
@@ -2394,39 +2415,135 @@ error:
 
 }
 
-static void  requestEnterSimPin(void*  data, size_t  datalen, RIL_Token  t)
+/**
+* Get the number of retries left for pin functions
+* Huawei EM770W is supposed to use %CPIN? to query pin_times, puk_times,
+* pin2_times and puk2_times, but it seems not support well. Here we bypass
+* this feature.
+*/
+static int getNumRetries(int request)
 {
-    ATResponse   *p_response = NULL;
-    int           err;
-    char*         cmd = NULL;
-    const char**  strings = (const char**)data;;
-
-    if ( datalen == sizeof(char*) ) {
-        asprintf(&cmd, "AT+CPIN=%s", strings[0]);
-    } else if ( datalen == 2*sizeof(char*) ) {
-        asprintf(&cmd, "AT+CPIN=%s,%s", strings[0], strings[1]);
-    } else
-        goto error;
-
-    err = at_send_command_singleline(cmd, "+CPIN:", &p_response);
-    free(cmd);
-
-    if (err < 0 || p_response->success == 0) {
-error:
-        RIL_onRequestComplete(t, RIL_E_PASSWORD_INCORRECT, NULL, 0);
-    } else {
-        RIL_onRequestComplete(t, RIL_E_SUCCESS, NULL, 0);
-    }
-    at_response_free(p_response);
+	return 1;
 }
 
+/**
+* Enter SIM PIN, might be PIN, PIN2, PUK, PUK2, etc.
+*
+* Data can hold pointers to one or two strings, depending on what we
+* want to enter. (PUK requires new PIN, etc.).
+*
+*/
+static void initializeCallback(void *param);
+void requestEnterSimPin(void *data, size_t datalen, RIL_Token t, int request)
+{
+    ATResponse *atresponse = NULL;
+    int err;
+    char *cmd = NULL;
+    const char **strings = (const char **) data;
+    int num_retries = -1;
+    AT_CME_Error cme_error_code;
+
+	/*
+	 * Datalen becomes 1 * sizeof(char *) larger than usual.
+	 * Need to keep align with before.
+	 */
+	if (datalen == 2 * sizeof(char *) && strings[1] == NULL)
+		datalen -= sizeof(char *);
+	if (datalen == 3 * sizeof(char *) && strings[2] == NULL)
+		datalen -= sizeof(char *);
+	
+    if (datalen == sizeof(char *)) {
+	/*
+	* Entering PIN(2) is not possible using AT+CPIN unless SIM state is
+	* PIN(2) required. The workaround is to change PIN(2) to the same value
+	* using AT+CPWD.
+	*/
+        if (request == RIL_REQUEST_ENTER_SIM_PIN && getSIMStatus() != SIM_PIN)
+            asprintf(&cmd, "AT+CPWD=\"SC\",\"%s\",\"%s\"", strings[0],
+                     strings[0]);
+        else if (request == RIL_REQUEST_ENTER_SIM_PIN2 &&
+                 getSIMStatus() != SIM_PIN2)
+            asprintf(&cmd, "AT+CPWD=\"P2\",\"%s\",\"%s\"", strings[0],
+                     strings[0]);
+        else
+            asprintf(&cmd, "AT+CPIN=\"%s\"", strings[0]);
+    } else if (datalen == 2 * sizeof(char *)) {
+	/*
+	* Unblocking PIN(2) is not possible using AT+CPIN unless SIM state is
+	* PUK(2) required. We need to support this due to 3GPP TS 31.121
+	* section 6.1.3. Using ATD for unblocking PIN only works when ME is
+	* camping on network.
+	*/
+        if (request == RIL_REQUEST_ENTER_SIM_PUK && getSIMStatus() != SIM_PUK)
+            asprintf(&cmd, "ATD**05*%s*%s*%s#;", strings[0], strings[1],
+                     strings[1]);
+        else if (request == RIL_REQUEST_ENTER_SIM_PUK2 &&
+                 getSIMStatus() != SIM_PUK2)
+            asprintf(&cmd, "ATD**052*%s*%s*%s#;", strings[0], strings[1],
+                     strings[1]);
+        else
+	        asprintf(&cmd, "AT+CPIN=\"%s\",\"%s\"", strings[0], strings[1]);
+    }else
+        goto error;
+
+    err = at_send_command(cmd, &atresponse);
+    free(cmd);
+
+    if (err < 0) {
+        goto error;
+    }
+    if (atresponse->success == 0) {
+        if (cme_error_code = at_get_cme_error(atresponse)) {
+            switch (cme_error_code) {
+            case CME_SIM_PIN_REQUIRED:
+            case CME_SIM_PUK_REQUIRED:
+            case CME_INCORRECT_PASSWORD:
+            case CME_SIM_PIN2_REQUIRED:
+            case CME_SIM_PUK2_REQUIRED:
+            case CME_SIM_FAILURE:
+                num_retries = getNumRetries(request);
+                RIL_onRequestComplete(t, RIL_E_PASSWORD_INCORRECT, &num_retries, sizeof(int *));
+                goto finally;
+
+            default:
+                break;
+            }
+        }
+        goto error;
+    }
+
+    /* Got OK, return success */
+    num_retries = getNumRetries(request);
+    RIL_onRequestComplete(t, RIL_E_SUCCESS, &num_retries, sizeof(int *));
+
+finally:
+	if (!err){
+		/*
+		* Currently, we didn't know how to trigger poll of SIM state, so we call it here.
+		* Maybe they can be put where reporting SIM state change. initializeCallback()
+		* is called to get ready to obtain IMSI.
+		*/
+		initializeCallback(NULL);
+		pollSIMState(NULL);
+		 err = at_send_command_multiline(
+		 "AT+COPS=3,0;+COPS?;+COPS=3,1;+COPS?;+COPS=3,2;+COPS?",
+		 "+COPS:", &atresponse);
+		RIL_onUnsolicitedResponse(RIL_UNSOL_RESPONSE_SIM_STATUS_CHANGED, NULL,0);
+	}
+
+    at_response_free(atresponse);
+    return;
+
+error:
+    RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
+    goto finally;
+}
 
 static void  requestSendUSSD(void *data, size_t datalen, RIL_Token t)
 {
     const char *ussdRequest;
 
     ussdRequest = (char *)(data);
-
 
     RIL_onRequestComplete(t, RIL_E_REQUEST_NOT_SUPPORTED, NULL, 0);
 
@@ -2536,6 +2653,339 @@ static void  requestBasebandVersion(void *data, size_t datalen, RIL_Token t)
     }
     at_response_free(p_response);
 }
+
+
+static void requestChangePassword(char *facility, void *data, size_t datalen,
+                           RIL_Token t, int request)
+{
+    int err = 0;
+    char *oldPassword = NULL;
+    char *newPassword = NULL;
+    char *cmd = NULL;
+    ATResponse *atresponse = NULL;
+    int num_retries = -1;
+    RIL_Errno errorril = RIL_E_GENERIC_FAILURE;
+    AT_CME_Error cme_error_code;
+
+	/*
+	 * datalen becomes 1 * sizeof(char *) larger than usual.
+	 * Need to keep align with before.
+	 */
+	if (datalen == 3 * sizeof(char **) && ((char **) data)[2] == NULL)
+		datalen -= sizeof(char **);
+    if (datalen != 2 * sizeof(char **) || strlen(facility) != 2) {
+        goto error;
+    }
+
+    oldPassword = ((char **) data)[0];
+    newPassword = ((char **) data)[1];
+
+    asprintf(&cmd, "AT+CPWD=\"%s\",\"%s\",\"%s\"", facility, oldPassword,
+             newPassword);
+
+    err = at_send_command(cmd, &atresponse);
+    free(cmd);
+
+    num_retries = getNumRetries(request);
+
+    if (err < 0) {
+        goto error;
+    }
+    if (atresponse->success == 0) {
+        if (cme_error_code = at_get_cme_error(atresponse)) {
+            switch (cme_error_code) {
+            case CME_INCORRECT_PASSWORD: /* CME ERROR 16: "Incorrect password" */
+                LOGI("%s(): Incorrect password", __func__);
+                errorril = RIL_E_PASSWORD_INCORRECT;
+                break;
+            case CME_SIM_PUK2_REQUIRED: /* CME ERROR 18: "SIM PUK2 required" happens when wrong
+PIN2 is used 3 times in a row */
+                LOGI("%s(): PIN2 locked, change PIN2 with PUK2", __func__);
+                num_retries = 0;/* PUK2 required */
+                errorril = RIL_E_SIM_PUK2;
+                break;
+            default: /* some other error */
+                break;
+            }
+        }
+        goto error;
+    }
+
+    RIL_onRequestComplete(t, RIL_E_SUCCESS, &num_retries, sizeof(int *));
+finally:
+    at_response_free(atresponse);
+    return;
+
+error:
+    RIL_onRequestComplete(t, errorril, &num_retries, sizeof(int *));
+    goto finally;
+}
+
+/**
+* RIL_REQUEST_CHANGE_SIM_PIN
+*
+* Change PIN 1.
+*/
+void requestChangeSimPin(void *data, size_t datalen, RIL_Token t, int request)
+{
+    requestChangePassword("SC", data, datalen, t, request);
+}
+
+/**
+* RIL_REQUEST_CHANGE_SIM_PIN2
+*
+* Change PIN 2.
+*/
+void requestChangeSimPin2(void *data, size_t datalen, RIL_Token t, int request)
+{
+    requestChangePassword("P2", data, datalen, t, request);
+}
+
+/**
+* RIL_REQUEST_SET_FACILITY_LOCK
+*
+* Enable/disable one facility lock.
+*/
+void requestSetFacilityLock(void *data, size_t datalen, RIL_Token t)
+{
+    int err;
+    ATResponse *atresponse = NULL;
+    char *cmd = NULL;
+    char *facility_string = NULL;
+    int facility_mode = -1;
+    char *facility_mode_str = NULL;
+    char *facility_password = NULL;
+    char *facility_class = NULL;
+    int num_retries = -1;
+    int classx;
+    size_t i;
+    RIL_Errno errorril = RIL_E_GENERIC_FAILURE;
+    AT_CME_Error cme_error_code;
+    char *barr_facilities[] = {"AO", "OI", "AI", "IR", "OX", "AB", "AG",
+        "AC", NULL};
+
+    assert(datalen >= (4 * sizeof(char **)));
+
+    facility_string = ((char **) data)[0];
+    facility_mode_str = ((char **) data)[1];
+    facility_password = ((char **) data)[2];
+    facility_class = ((char **) data)[3];
+    classx = atoi(facility_class);
+
+    assert(*facility_mode_str == '0' || *facility_mode_str == '1');
+    facility_mode = atoi(facility_mode_str);
+
+	/*
+	* Android send class 0 for USSD strings that didn't contain a class.
+	* Class 0 is not considered a valid value and according to 3GPP 24.080 a
+	* missing BasicService (BS) parameter in the Supplementary Service string
+	* indicates all BS'es.
+	*
+	* Therefore we convert a class of 0 into 255 (all classes) before sending
+	* the AT command for the following barrings:
+	*
+	* "AO": barr All Outgoing calls
+	* "OI": barr Outgoing International calls
+	* "AI": barr All Incomming calls
+	* "IR": barr Incoming calls when Roaming outside the home country
+	* "OX": barr Outgoing international calls eXcept to home country
+	* "AB": all barring services (only unlock mode=0)
+	* "AG": all outgoing barring services (only unlock mode=0)
+	* "AC": all incoming barring services (only unlock mode=0)
+	*/
+    for (i = 0; barr_facilities[i] != NULL; i++) {
+        if (!strncmp(facility_string, barr_facilities[i], 2)) {
+            if (classx == 0)
+                classx = 255;
+            break;
+        }
+    }
+
+	/*
+	* Skip adding facility_password to AT command parameters if it is NULL,
+	* printing NULL with %s will give string "(null)".
+	*/
+    asprintf(&cmd, "AT+CLCK=\"%s\",%d,\"%s\",%d", facility_string,
+        facility_mode, (facility_password ? facility_password : "" ), classx);
+
+    err = at_send_command(cmd, &atresponse);
+    free(cmd);
+    if (err < 0) {
+        goto exit;
+    }
+    if (atresponse->success == 0) {
+        if (cme_error_code = at_get_cme_error(atresponse)) {
+            switch (cme_error_code) {
+            /* CME ERROR 11: "SIM PIN required" happens when PIN is wrong */
+            case CME_SIM_PIN_REQUIRED:
+                LOGI("requestSetFacilityLock(): wrong PIN");
+                num_retries = getNumRetries(RIL_REQUEST_ENTER_SIM_PIN);
+                errorril = RIL_E_PASSWORD_INCORRECT;
+                break;
+			/*
+			* CME ERROR 12: "SIM PUK required" happens when wrong PIN is used
+			* 3 times in a row
+			*/
+            case CME_SIM_PUK_REQUIRED:
+                LOGI("requestSetFacilityLock() PIN locked,"
+                " change PIN with PUK");
+                num_retries = 0;/* PUK required */
+                errorril = RIL_E_PASSWORD_INCORRECT;
+                break;
+            /* CME ERROR 16: "Incorrect password" happens when PIN is wrong */
+            case CME_INCORRECT_PASSWORD:
+                LOGI("%s(): Incorrect password, Facility: %s", __func__,
+                     facility_string);
+                errorril = RIL_E_PASSWORD_INCORRECT;
+                break;
+            /* CME ERROR 17: "SIM PIN2 required" happens when PIN2 is wrong */
+            case CME_SIM_PIN2_REQUIRED:
+                LOGI("requestSetFacilityLock() wrong PIN2");
+                num_retries = getNumRetries(RIL_REQUEST_ENTER_SIM_PIN2);
+                errorril = RIL_E_PASSWORD_INCORRECT;
+                break;
+			/*
+			* CME ERROR 18: "SIM PUK2 required" happens when wrong PIN2 is used
+			* 3 times in a row
+			*/
+            case CME_SIM_PUK2_REQUIRED:
+                LOGI("requestSetFacilityLock() PIN2 locked, change PIN2"
+                "with PUK2");
+                num_retries = 0;/* PUK2 required */
+                errorril = RIL_E_SIM_PUK2;
+                break;
+            default: /* some other error */
+                num_retries = -1;
+                break;
+            }
+        }
+        goto finally;
+    }
+
+    errorril = RIL_E_SUCCESS;
+
+finally:
+    if (num_retries == -1 && strncmp(facility_string, "SC", 2) == 0)
+        num_retries = getNumRetries(RIL_REQUEST_ENTER_SIM_PIN);
+exit:
+    at_response_free(atresponse);
+    RIL_onRequestComplete(t, errorril, &num_retries, sizeof(int *));
+}
+
+/**
+* RIL_REQUEST_QUERY_FACILITY_LOCK
+*
+* Query the status of a facility lock state.
+*/
+void requestQueryFacilityLock(void *data, size_t datalen, RIL_Token t)
+{
+    int err, response = 0;
+    ATResponse *atresponse = NULL;
+    char *cmd = NULL;
+    char *line = NULL;
+    char *facility_string = NULL;
+    char *facility_class = NULL;
+    int classx;
+    ATLine *cursor;
+    size_t i;
+    bool barring_service = false;
+
+	/*
+	* The following barring services may return multiple lines of intermediate
+	* result codes and will return two parameters in the +CLCK response.
+	*
+	* "AO": barr All Outgoing calls
+	* "OI": barr Outgoing International calls
+	* "AI": barr All Incomming calls
+	* "IR": barr Incoming calls when Roaming outside the home country
+	* "OX": barr Outgoing international calls eXcept to home country
+	*/
+    char *barr_facilities[] = {"AO", "OI", "AI", "IR", "OX", NULL};
+
+    assert(datalen >= (3 * sizeof(char **)));
+
+    facility_string = ((char **) data)[0];
+    facility_class = ((char **) data)[2];
+    classx = atoi(facility_class);
+
+	/*
+	* Android send class 0 for USSD strings that didn't contain a class.
+	* Class 0 is not considered a valid value and according to 3GPP 24.080 a
+	* missing BasicService (BS) parameter in the Supplementary Service string
+	* indicates all BS'es.
+	*
+	* Therefore we convert a class of 0 into 255 (all classes) before sending
+	* the AT command.
+	*/
+    if (classx == 0)
+        classx = 255;
+
+    for (i = 0; barr_facilities[i] != NULL; i++) {
+        if (!strncmp(facility_string, barr_facilities[i], 2)) {
+            barring_service = true;
+        }
+    }
+
+    /* password is not needed for query of facility lock. */
+    asprintf(&cmd, "AT+CLCK=\"%s\",2,,%d", facility_string, classx);
+
+    err = at_send_command_multiline(cmd, "+CLCK:", &atresponse);
+    free(cmd);
+    if (err < 0 || atresponse->success == 0)
+        goto error;
+
+    for (cursor = atresponse->p_intermediates; cursor != NULL;
+         cursor = cursor->p_next) {
+        int status = 0;
+
+        line = cursor->line;
+
+        err = at_tok_start(&line);
+
+        if (err < 0)
+            goto error;
+
+        err = at_tok_nextint(&line, &status);
+
+        if (err < 0)
+            goto error;
+
+        if (barring_service) {
+            err = at_tok_nextint(&line, &classx);
+
+            if (err < 0)
+                goto error;
+
+            if (status == 1)
+                response += classx;
+        } else {
+            switch (status) {
+            case 1:
+                /* Default value including voice, data and fax services */
+                response = 7;
+                break;
+            default:
+                response = 0;
+            }
+			/*
+			* There will be only 1 line of intermediate result codes when <fac>
+			* is not a barring service.
+			*/
+            break;
+        }
+    }
+
+    RIL_onRequestComplete(t, RIL_E_SUCCESS, &response, sizeof(int *));
+
+finally:
+    at_response_free(atresponse);
+    return;
+
+error:
+    RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
+    goto finally;
+}
+
 
 /*** Callback methods from the RIL library to us ***/
 
@@ -2835,9 +3285,7 @@ onRequest (int request, void *data, size_t datalen, RIL_Token t)
         case RIL_REQUEST_ENTER_SIM_PUK:
         case RIL_REQUEST_ENTER_SIM_PIN2:
         case RIL_REQUEST_ENTER_SIM_PUK2:
-        case RIL_REQUEST_CHANGE_SIM_PIN:
-        case RIL_REQUEST_CHANGE_SIM_PIN2:
-            requestEnterSimPin(data, datalen, t);
+            requestEnterSimPin(data, datalen, t, request);
             break;
 
         case RIL_REQUEST_IMS_REGISTRATION_STATE: {
@@ -2906,8 +3354,13 @@ onRequest (int request, void *data, size_t datalen, RIL_Token t)
         case RIL_REQUEST_CDMA_SUBSCRIPTION:
             if (TECH_BIT(sMdmInfo) == MDM_CDMA) {
                 requestCdmaSubscription(request, data, datalen, t);
-                break;
-            } // Fall-through if tech is not cdma
+            } else{
+                /* Should it's current tech is not MDM_CDMA, complete it with FAILURE.
+                 * Otherwise RILJ will crash in readRilMessage.
+                */
+                RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
+            }
+            break;
 
         case RIL_REQUEST_CDMA_SET_SUBSCRIPTION_SOURCE:
             if (TECH_BIT(sMdmInfo) == MDM_CDMA) {
@@ -2938,6 +3391,21 @@ onRequest (int request, void *data, size_t datalen, RIL_Token t)
                 requestExitEmergencyMode(data, datalen, t);
                 break;
             } // Fall-through if tech is not cdma
+        case RIL_REQUEST_CHANGE_SIM_PIN:
+            requestChangeSimPin(data, datalen, t, request);
+            break;
+        	
+        case RIL_REQUEST_CHANGE_SIM_PIN2:
+            requestChangeSimPin2(data, datalen, t, request);
+            break;
+        	
+        case RIL_REQUEST_SET_FACILITY_LOCK:
+            requestSetFacilityLock(data, datalen, t);
+            break;
+        	
+        case RIL_REQUEST_QUERY_FACILITY_LOCK:
+            requestQueryFacilityLock(data, datalen, t);
+            break;
 
         case RIL_REQUEST_GET_CELL_INFO_LIST:
             requestGetCellInfoList(data, datalen, t);
@@ -3048,7 +3516,6 @@ setRadioState(RIL_RadioState newState)
 
     if (sState != newState || s_closed > 0) {
         sState = newState;
-
         pthread_cond_broadcast (&s_state_cond);
     }
 
@@ -3334,7 +3801,8 @@ static void pollSIMState (void *param)
     ATResponse *p_response;
     int ret;
 
-	if (sState != RADIO_STATE_ON) {
+    if (sState != RADIO_STATE_ON &&
+	sState != RADIO_STATE_SIM_LOCKED_OR_ABSENT) {
     // no longer valid to poll
         return;
     }
