@@ -14,7 +14,7 @@
 ** See the License for the specific language governing permissions and
 ** limitations under the License.
 */
-/* Copyright (C) 2011 Freescale Semiconductor,Inc. */
+/* Copyright (C) 2011-2013 Freescale Semiconductor, Inc. */
 
 #include "atchannel.h"
 #include "at_tok.h"
@@ -34,7 +34,9 @@
 #include <netinet/in.h>
 #include <linux/if.h>
 
+#undef LOG_NDEBUG
 #define LOG_NDEBUG 0
+#undef LOG_TAG
 #define LOG_TAG "AT"
 #include <utils/Log.h>
 

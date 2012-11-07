@@ -11,7 +11,8 @@ LOCAL_SHARED_LIBRARIES := \
 	liblog \
 	libcutils \
 	libril \
-	libdl
+	libdl  \
+	libruntime-ril-port
 
 # temporary hack for broken vendor rils
 LOCAL_WHOLE_STATIC_LIBRARIES := \

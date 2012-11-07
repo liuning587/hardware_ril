@@ -33,8 +33,7 @@
 
 #include <signal.h>
 #include <unistd.h>
-#include "runtime.h"
-#include "misc.h"
+#include <runtime/runtime.h>
 
 int current_modem_type = UNKNOWN_MODEM;
 
@@ -105,7 +104,23 @@ static struct modem_3g_device modem_3g_device_table[] = {
 		.deviceport	= "/dev/ttyACM3",
 		.dataport	= "/dev/ttyACM0",
 		.type		= AMAZON_MODEM,
-	}
+	},
+	{
+		.name		= "ZTE-MF220",
+		.idVendor	= "19d2",
+		.idProduct	= "0145",
+		.deviceport     = "/dev/ttyUSB2",
+		.dataport	= "/dev/ttyUSB4",
+		.type		= ZTE_MODEM,
+	},
+	{
+		.name		= "ZTE-MF210",
+		.idVendor	= "19d2",
+		.idProduct	= "0117",
+		.deviceport     = "/dev/ttyUSB1",
+		.dataport	= "/dev/ttyUSB2",
+		.type		= ZTE_MODEM,
+	},
 };
 
 /* -------------------------------------------------------------- */
@@ -164,7 +179,7 @@ find_devices_in_table(const char *idvendor, const char *idproduct)
 		device = &modem_3g_device_table[i];
 
 		if (is_device_equal(device, idvendor, idproduct)) {
-			LOGI("Runtime 3G port found matched device with "
+			ALOGI("Runtime 3G port found matched device with "
 			     "Name:%s idVendor:%s idProduct:%s",
 			     device->name, device->idVendor, device->idProduct);
 
@@ -224,7 +239,7 @@ struct modem_3g_device *find_matched_device(void)
 	}
 
 	if (device == NULL)
-		LOGI("Runtime 3G can't find supported modem");
+		ALOGI("Runtime 3G can't find supported modem");
 out:
 	closedir(usbdir);
 	free(path);
@@ -244,7 +259,7 @@ const char *runtime_3g_port_device(void)
 	/* Set gobal modem type. */
 	current_modem_type = device->type;
 
-	LOGI("Current modem type = %d", current_modem_type);
+	ALOGI("Current modem type = %d", current_modem_type);
 
 	return device->deviceport;
 }
@@ -257,6 +272,24 @@ const char *runtime_3g_port_data(void)
 	if (device == NULL)
 		return FAKE_PORT;
 	return device->dataport;
+}
+
+int runtime_3g_port_type(void)
+{
+       struct modem_3g_device *device;
+       int type = UNKNOWN_MODEM;
+       if (UNKNOWN_MODEM == current_modem_type){
+               if (NULL != (device = find_matched_device())){
+                       /* Set gobal modem type. */
+                       type = device->type;
+               }
+       }else{
+               type = current_modem_type;
+       }
+
+       LOGI("Current modem type = %d", type);
+
+       return type;
 }
 
 static void free_uevent(struct uevent *event)
@@ -305,12 +338,12 @@ int process_uevent_message(int sock)
 	struct uevent *event;
 	count = recv(sock, buffer, sizeof(buffer), 0);
 	if (count < 0) {
-		LOGE("Error receiving uevent (%s)", strerror(errno));
+		ALOGE("Error receiving uevent (%s)", strerror(errno));
 		return -errno;
 	}
 	event = malloc(sizeof(struct uevent));
 	if (!event) {
-		LOGE("Error allcating memroy (%s)", strerror(errno));
+		ALOGE("Error allcating memroy (%s)", strerror(errno));
 		return -errno;
 	}
 	memset(event, 0, sizeof(struct uevent));
@@ -353,18 +386,18 @@ static void dump_uevent(struct uevent *event)
 {
     int i;
 
-    LOGD("[UEVENT] Sq: %u S: %s A: %d P: %s",
+    ALOGD("[UEVENT] Sq: %u S: %s A: %d P: %s",
 	      event->seqnum, event->subsystem, event->action, event->path);
     for (i = 0; i < UEVENT_PARAMS_MAX; i++) {
 	    if (!event->param[i])
 		    break;
-	    LOGD("%s", event->param[i]);
+	    ALOGD("%s", event->param[i]);
     }
 }
 
 void restart_rild(int p)
 {
-	LOGI("3G Modem changed,RILD will restart...");
+	ALOGI("3G Modem changed,RILD will restart...");
 	exit(-1);
 }
 
@@ -378,7 +411,7 @@ void *usb_tty_monitor_thread(void *arg)
 	int timeout = -1;
 	struct sigaction timeoutsigact;
 
-	LOGI("3G modem monitor thread is start");
+	ALOGI("3G modem monitor thread is start");
 
 	timeoutsigact.sa_handler = restart_rild;
 	sigemptyset(&timeoutsigact.sa_mask);
@@ -392,18 +425,18 @@ void *usb_tty_monitor_thread(void *arg)
 
 	uevent_sock = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_KOBJECT_UEVENT);
 	if (uevent_sock < 0) {
-		LOGE(" Netlink socket faild, usb monitor exiting...");
+		ALOGE(" Netlink socket faild, usb monitor exiting...");
 		return NULL;
 	}
 
 	if (setsockopt(uevent_sock, SOL_SOCKET, SO_RCVBUFFORCE, &uevent_sz,
 		       sizeof(uevent_sz)) < 0) {
-		LOGE("Unable to set uevent socket options: %s", strerror(errno));
+		ALOGE("Unable to set uevent socket options: %s", strerror(errno));
 		return NULL;
 	}
 
 	if (bind(uevent_sock, (struct sockaddr *) &nladdr, sizeof(nladdr)) < 0) {
-		   LOGE("Unable to bind uevent socket: %s", strerror(errno));
+		   ALOGE("Unable to bind uevent socket: %s", strerror(errno));
 		   return NULL;
 	}
 	pollfds[0].fd = uevent_sock;
@@ -411,17 +444,17 @@ void *usb_tty_monitor_thread(void *arg)
 
 	ret = fcntl(uevent_sock,F_SETFL, O_NONBLOCK);
 	if (ret < 0)
-		LOGE("Error on fcntl:%s", strerror(errno));
+		ALOGE("Error on fcntl:%s", strerror(errno));
 
 	while (1) {
 		ret = poll(pollfds, 1, timeout);
 
 		switch (ret) {
 		case 0:
-			LOGD("poll timeout");
+			ALOGD("poll timeout");
 			continue;
 		case -1:
-			LOGD("poll error:%s", strerror(errno));
+			ALOGD("poll error:%s", strerror(errno));
 			break;
 
 		default:
