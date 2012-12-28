@@ -287,7 +287,7 @@ int runtime_3g_port_type(void)
                type = current_modem_type;
        }
 
-       LOGI("Current modem type = %d", type);
+       ALOGI("Current modem type = %d", type);
 
        return type;
 }

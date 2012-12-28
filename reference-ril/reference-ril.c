@@ -1010,8 +1010,21 @@ static void requestSignalStrength(void *data, size_t datalen, RIL_Token t)
     int err;
     char *line;
     int count =0;
-    int numofElements=sizeof(RIL_SignalStrength_v6)/sizeof(int);
-    int response[numofElements];
+	int numofElements;
+	int *response;
+	int modem_type;
+	modem_type = runtime_3g_port_type();
+
+	if ((HUAWEI_MODEM == modem_type) ||
+		(AMAZON_MODEM == modem_type)){
+		/* Huawei EM770W response is in RIL_GW_SignalStrength form */
+		numofElements=sizeof(RIL_GW_SignalStrength)/sizeof(int);
+	}else{
+		numofElements=sizeof(RIL_SignalStrength_v6)/sizeof(int);
+	}
+	response = (int *)calloc(numofElements, sizeof(int));
+    if (!response) goto error;
+    //int response[numofElements];
 
     if(sUnsolictedCREG_failed) {
         LOGW("Retry the AT+CREG event report setting");
@@ -1070,12 +1083,15 @@ static void requestSignalStrength(void *data, size_t datalen, RIL_Token t)
     RIL_onRequestComplete(t, RIL_E_SUCCESS, response, sizeof(response));
 
     at_response_free(p_response);
+	free(response);
     return;
 
 error:
     RLOGE("requestSignalStrength must never return an error when radio is on");
     RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
     at_response_free(p_response);
+	free(response);
+
 }
 
 /**
@@ -3133,11 +3149,10 @@ static void pollSIMState (void *param)
     ATResponse *p_response;
     int ret;
 
-    if (sState != RADIO_STATE_SIM_NOT_READY) {
-        // no longer valid to poll
+	if (sState != RADIO_STATE_ON) {
+    // no longer valid to poll
         return;
     }
-
     switch(getSIMStatus()) {
         case SIM_ABSENT:
         case SIM_PIN:
@@ -3285,17 +3300,24 @@ int query_ctec(ModemInfo *mdm, int *current, int32_t *preferred)
     ATResponse *response = NULL;
     int err;
     int res;
+	int modem_type;
+	modem_type = runtime_3g_port_type();
 
-    RLOGD("query_ctec. current: %d, preferred: %d", (int)current, (int) preferred);
-    err = at_send_command_singleline("AT+CTEC?", "+CTEC:", &response);
-    if (!err && response->success) {
-        res = parse_technology_response(response->p_intermediates->line, current, preferred);
+    if ((HUAWEI_MODEM == modem_type) ||
+            (AMAZON_MODEM == modem_type)){
+        return 0;
+    }else{
+        RLOGD("query_ctec. current: %d, preferred: %d", (int)current, (int) preferred);
+        err = at_send_command_singleline("AT+CTEC?", "+CTEC:", &response);
+        if (!err && response->success) {
+            res = parse_technology_response(response->p_intermediates->line, current, preferred);
+            at_response_free(response);
+            return res;
+        }
+        RLOGE("Error executing command: %d. response: %x. status: %d", err, (int)response, response? response->success : -1);
         at_response_free(response);
-        return res;
+        return -1;
     }
-    RLOGE("Error executing command: %d. response: %x. status: %d", err, (int)response, response? response->success : -1);
-    at_response_free(response);
-    return -1;
 }
 
 int is_multimode_modem(ModemInfo *mdm)
@@ -3324,31 +3346,43 @@ static void probeForModemMode(ModemInfo *info)
 {
     ATResponse *response;
     int err;
-    assert (info);
-    // Currently, our only known multimode modem is qemu's android modem,
-    // which implements the AT+CTEC command to query and set mode.
-    // Try that first
+    int modem_type;
+    modem_type = runtime_3g_port_type();
 
-    if (is_multimode_modem(info)) {
-        RLOGI("Found Multimode Modem. Supported techs mask: %8.8x. Current tech: %d",
-            info->supportedTechs, info->currentTech);
-        return;
+    if ((HUAWEI_MODEM == modem_type) ||
+            (AMAZON_MODEM == modem_type)){
+        /* AT+CTEC is not supported by EM770W. Even worse, AT process would be blocked
+         * when it encounters unknown command. So here just hard code ModemInfo.
+         */
+        info->preferredNetworkMode = MDM_GSM | MDM_WCDMA; //Has equal preference
+    }else{
+
+        assert (info);
+        // Currently, our only known multimode modem is qemu's android modem,
+        // which implements the AT+CTEC command to query and set mode.
+        // Try that first
+
+        if (is_multimode_modem(info)) {
+            RLOGI("Found Multimode Modem. Supported techs mask: %8.8x. Current tech: %d",
+                    info->supportedTechs, info->currentTech);
+            return;
+        }
+
+        /* Being here means that our modem is not multimode */
+        info->isMultimode = 0;
+
+        /* CDMA Modems implement the AT+WNAM command */
+        err = at_send_command_singleline("AT+WNAM","+WNAM:", &response);
+        if (!err && response->success) {
+            at_response_free(response);
+            // TODO: find out if we really support EvDo
+            info->supportedTechs = MDM_CDMA | MDM_EVDO;
+            info->currentTech = MDM_CDMA;
+            RLOGI("Found CDMA Modem");
+            return;
+        }
+        if (!err) at_response_free(response);
     }
-
-    /* Being here means that our modem is not multimode */
-    info->isMultimode = 0;
-
-    /* CDMA Modems implement the AT+WNAM command */
-    err = at_send_command_singleline("AT+WNAM","+WNAM:", &response);
-    if (!err && response->success) {
-        at_response_free(response);
-        // TODO: find out if we really support EvDo
-        info->supportedTechs = MDM_CDMA | MDM_EVDO;
-        info->currentTech = MDM_CDMA;
-        RLOGI("Found CDMA Modem");
-        return;
-    }
-    if (!err) at_response_free(response);
     // TODO: find out if modem really supports WCDMA/LTE
     info->supportedTechs = MDM_GSM | MDM_WCDMA | MDM_LTE;
     info->currentTech = MDM_GSM;
