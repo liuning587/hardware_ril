@@ -42,6 +42,7 @@
 #include "hardware/qemu_pipe.h"
 #include <linux/if.h>
 
+#undef LOG_TAG
 #define LOG_TAG "RIL"
 #include <utils/Log.h>
 
@@ -181,6 +182,19 @@ typedef enum {
     UICC_TYPE_USIM,
 } UICC_Type;
 
+/* Huawei E770W subsys_mode spec. */
+typedef enum{
+	SUB_SYSMODE_NO_SERVICE = 0,
+	SUB_SYSMODE_GSM = 1,
+	SUB_SYSMODE_GPRS = 2,
+	SUB_SYSMODE_EDGE = 3,
+	SUB_SYSMODE_WCDMA = 4,
+	SUB_SYSMODE_HSDPA = 5,
+	SUB_SYSMODE_HSUPA = 6,
+	SUB_SYSMODE_HSUPA_HSDPA = 7,
+	SUB_SYSMODE_INVALID = 8,
+}SUB_SYSMODE;
+
 static void onRequest (int request, void *data, size_t datalen, RIL_Token t);
 static RIL_RadioState currentState();
 static int onSupports (int requestCode);
@@ -272,6 +286,12 @@ static int s_lac = 0;
 static int s_cid = 0;
 static int sUnsolictedCREG_failed = 0;
 static int sUnsolictedCGREG_failed = 0;
+/*
+ * Some modem, like Huawei E770W, doesn't contain network type field in CGREG response.
+ *  We need to get network type through other way.
+ */
+static int sNetworkType = 0; //Unknown
+static int sLastNetworkType = -1; //Unknown
 
 static void pollSIMState (void *param);
 static void setRadioState(RIL_RadioState newState);
@@ -279,6 +299,7 @@ static void setRadioTechnology(ModemInfo *mdm, int newtech);
 static int query_ctec(ModemInfo *mdm, int *current, int32_t *preferred);
 static int parse_technology_response(const char *response, int *current, int32_t *preferred);
 static int techFromModemType(int mdmtype);
+static int convertRILRadioTechnology(int subsys_mode, int modem_type);
 
 static int clccStateToRILState(int state, RIL_CallState *p_state)
 
@@ -1447,7 +1468,13 @@ static int parseRegistrationState(char *str, int *type, int *items, int **respon
         if (*p == ',') commas++;
     }
 
-    resp = (int *)calloc(commas + 1, sizeof(int));
+    //resp = (int *)calloc(commas + 1, sizeof(int));
+    /* Huawei EM770W has the response of +CREG: <n>, <stat>
+        * it gets networkType in some other way, so assume it
+        * has long response to accommodate networkType value.
+        */
+    #define COMMAS_MAX 4
+    resp = (int *)calloc(COMMAS_MAX + 1, sizeof(int));
     if (!resp) goto error;
     switch (commas) {
         case 0: /* +CREG: <stat> */
@@ -1586,11 +1613,22 @@ static void requestRegistrationState(int request, void *data,
       }
     } else { // type == RADIO_TECH_3GPP
         RLOGD("registration state type: 3GPP");
+        RLOGD("%s: registration[0]..[3]: %d, %d, %d, %d", __func__, registration[0],registration[1],registration[2],registration[3]);
         startfrom = 0;
         asprintf(&responseStr[1], "%x", registration[1]);
         asprintf(&responseStr[2], "%x", registration[2]);
-        if (count > 3)
+        if (count > 3){
+	    registration[3] = convertRILRadioTechnology(registration[3], runtime_3g_port_type());
             asprintf(&responseStr[3], "%d", registration[3]);
+	}
+	else{
+	    /*
+	     * In case +CGREG doesn't respond with <networkType>, networkType
+	     * may be obtained in some other way.
+	     */
+	    registration[3] = sNetworkType;
+	    asprintf(&responseStr[3], "%d", registration[3]);
+        }
     }
     asprintf(&responseStr[0], "%d", registration[0]);
 
@@ -3660,6 +3698,49 @@ static void sendUnsolImsNetworkStateChanged()
 }
 
 /**
+* Convert radio technology between Android telephony and Huawei EM770W spec.
+*/
+static int convertRILRadioTechnology(int subsys_mode, int modem_type)
+{
+	int ret;
+	if (HUAWEI_MODEM == modem_type){
+		switch (subsys_mode){
+			case SUB_SYSMODE_NO_SERVICE:
+				ret = RADIO_TECH_UNKNOWN;
+			break;
+			case SUB_SYSMODE_GSM:
+				ret = RADIO_TECH_GSM;
+			break;
+			case SUB_SYSMODE_GPRS:
+				ret = RADIO_TECH_GPRS;
+			break;
+			case SUB_SYSMODE_EDGE:
+				ret = RADIO_TECH_EDGE;
+			break;
+			case SUB_SYSMODE_WCDMA:
+				ret = RADIO_TECH_UMTS;
+			break;
+			case SUB_SYSMODE_HSDPA:
+				ret = RADIO_TECH_HSDPA;
+			break;
+			case SUB_SYSMODE_HSUPA:
+				ret = RADIO_TECH_HSUPA;
+			break;
+			case SUB_SYSMODE_HSUPA_HSDPA:
+				ret = RADIO_TECH_HSPA;
+			break;
+			default:
+				ret = RADIO_TECH_UNKNOWN;
+		}
+	}else if (AMAZON_MODEM == modem_type){
+		/* ToDo: convert radio technology for Amazon1*/
+		ret = RADIO_TECH_UNKNOWN;
+	}else{
+		ret = subsys_mode;
+	}
+	return ret;
+}
+/**
  * Called by atchannel when an unsolicited line appears
  * This is called on atchannel's reader thread. AT commands may
  * not be issued here
@@ -3850,8 +3931,32 @@ static void onUnsolicited (const char *s, const char *sms_pdu)
         RIL_onUnsolicitedResponse(RIL_UNSOL_CDMA_PRL_CHANGED, &version, sizeof(version));
     } else if (strStartsWith(s, "+CFUN: 0")) {
         setRadioState(RADIO_STATE_OFF);
-    }
+    } else if (strStartsWith(s, "^MODE")){
+		/*
+		 * Huawei E770W reports it's subsys_mode as networkType.
+		 */
+		char *response;
+
+		line = strdup(s);
+		at_tok_start(&line);
+
+		err = at_tok_nextstr(&line, &response);
+
+		if (err != 0) {
+			LOGE("invalid MODE line %s\n", s);
+		} else {
+			response[0] = atoi(line);
+			sNetworkType = convertRILRadioTechnology(response[0], runtime_3g_port_type());
+			if (sLastNetworkType != sNetworkType){
+				sLastNetworkType = sNetworkType;
+				RIL_onUnsolicitedResponse (
+					RIL_UNSOL_RESPONSE_VOICE_NETWORK_STATE_CHANGED,
+					NULL, 0);
+			}
+		}
+	}
 }
+
 
 /* Called on command or reader thread */
 static void onATReaderClosed()

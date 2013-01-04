@@ -14,6 +14,7 @@
 ** See the License for the specific language governing permissions and
 ** limitations under the License.
 */
+/* Copyright (C) 2011-2013 Freescale Semiconductor, Inc. */
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -22,6 +23,7 @@
 
 #include "misc.h"
 
+#undef LOG_TAG
 #define LOG_TAG "RILD"
 #include <utils/Log.h>
 /** returns 1 if line starts with prefix, 0 if it does not */

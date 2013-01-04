@@ -14,6 +14,7 @@
 ** See the License for the specific language governing permissions and
 ** limitations under the License.
 */
+/* Copyright (C) 2011-2013 Freescale Semiconductor, Inc. */
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -47,6 +48,7 @@ int binaryToString(const unsigned char *binary,
                    size_t len,
                    char *string);
 
+char char2nib(char c);
 #ifdef __cplusplus
 }
 #endif
