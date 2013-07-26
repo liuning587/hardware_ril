@@ -3344,6 +3344,10 @@ onRequest (int request, void *data, size_t datalen, RIL_Token t)
                 requestBasebandVersion(data, datalen, t);
                 break;
             }
+            else {
+                RIL_onRequestComplete(t, RIL_E_REQUEST_NOT_SUPPORTED, NULL, 0);
+                break;
+            }
 
         case RIL_REQUEST_DEVICE_IDENTITY:
             if (TECH_BIT(sMdmInfo) == MDM_CDMA) {
@@ -3413,13 +3417,6 @@ onRequest (int request, void *data, size_t datalen, RIL_Token t)
 
         case RIL_REQUEST_SET_UNSOL_CELL_INFO_LIST_RATE:
             requestSetCellInfoListRate(data, datalen, t);
-            break;
-
-        case RIL_REQUEST_BASEBAND_VERSION:
-            if (current_modem_type == HUAWEI_MODEM)
-                requestBasebandVersion(data, datalen, t);
-            else
-                RIL_onRequestComplete(t, RIL_E_REQUEST_NOT_SUPPORTED, NULL, 0);
             break;
 
         default:
