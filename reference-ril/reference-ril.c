@@ -3955,7 +3955,7 @@ int query_ctec(ModemInfo *mdm, int *current, int32_t *preferred)
 
     if ((HUAWEI_MODEM == modem_type) ||
             (AMAZON_MODEM == modem_type)){
-        return 0;
+        return -1;
     }else{
         RLOGD("query_ctec. current: %d, preferred: %d", (int)current, (int) preferred);
         err = at_send_command_singleline("AT+CTEC?", "+CTEC:", &response);
