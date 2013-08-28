@@ -778,13 +778,15 @@ static void requestOrSendDataCallList(RIL_Token *t)
                 char  propName[PROP_NAME_MAX];
                 memset(dnslist, 0, 128);
                 property_get("net.ppp0.dns1", propName, "8.8.8.8");
-                strlcat(dnslist, propValue, dnslist_sz);
+                strlcat(dnslist, propName, dnslist_sz);
                 strlcat(dnslist, separator, dnslist_sz);
                 property_get("net.ppp0.dns2", propName, "8.8.4.4");
-                strlcat(dnslist, propValue, dnslist_sz);
-
+                strlcat(dnslist, propName, dnslist_sz);
                 responses[i].dnses = dnslist;
-                responses[i].gateways = "";
+                property_get("net.ppp0.remote-ip", propName, "");
+                responses[i].gateways = propName;
+                property_get("net.ppp0.local-ip", propName, "");
+                responses[i].addresses = propName;
             }
         }
     }
