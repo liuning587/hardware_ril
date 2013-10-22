@@ -26,6 +26,64 @@
 #undef LOG_TAG
 #define LOG_TAG "RILD"
 #include <utils/Log.h>
+
+
+/**
+ * Very simple function that extract and returns whats between ElementBeginTag
+ * and ElementEndTag.
+ *
+ * Optional ppszRemainingDocument that can return a pointer to the remaining
+ * of the document to be "scanned". This can be used if subsequent
+ * scanning/searching is desired.
+ *
+ * This function is used to extract the parameters from the XML result
+ * returned by U3xx during a PDP Context setup, and used to parse the
+ * tuples of operators returned from AT+COPS.
+ *
+ *  const char* document        - Document to be scanned
+ *  const char* elementBeginTag - Begin tag to scan for, return whats
+ *                                between begin/end tags
+ *  const char* elementEndTag   - End tag to scan for, return whats
+ *                                between begin/end tags
+ *  char** remainingDocumen t   - Can return the a pointer to the remaining
+ *                                of pszDocument, this parameter is optional
+ *
+ *  return char* containing whats between begin/end tags, allocated on the
+ *               heap, need to free this.
+ *               return NULL if nothing is found.
+ */
+char *getFirstElementValue(const char *document,
+                           const char *elementBeginTag,
+                           const char *elementEndTag,
+                           char **remainingDocument)
+{
+    char *value = NULL;
+    char *start = NULL;
+    char *end = NULL;
+
+    if (document != NULL && elementBeginTag != NULL
+        && elementEndTag != NULL) {
+        start = strstr(document, elementBeginTag);
+        if (start != NULL) {
+            end = strstr(start, elementEndTag);
+            if (end != NULL) {
+                int n = strlen(elementBeginTag);
+                int m = end - (start + n);
+                value = (char *) malloc((m + 1) * sizeof(char));
+                strncpy(value, (start + n), m);
+                value[m] = (char) 0;
+
+                /* Optional, return a pointer to the remaining document,
+                   to be used when document contains many tags with same name. */
+                if (remainingDocument != NULL)
+                    *remainingDocument = end + strlen(elementEndTag);
+            }
+        }
+    }
+    return value;
+}
+
+
 /** returns 1 if line starts with prefix, 0 if it does not */
 int strStartsWith(const char *line, const char *prefix)
 {

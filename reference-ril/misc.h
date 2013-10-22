@@ -49,6 +49,13 @@ int binaryToString(const unsigned char *binary,
                    char *string);
 
 char char2nib(char c);
+
+
+char *getFirstElementValue(const char *document,
+                           const char *elementBeginTag,
+                           const char *elementEndTag,
+                           char **remainingDocument);
+
 #ifdef __cplusplus
 }
 #endif

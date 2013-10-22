@@ -14,11 +14,34 @@
 ** See the License for the specific language governing permissions and
 ** limitations under the License.
 */
+/* Copyright (C) 2013 Freescale Semiconductor, Inc. */
 
 #include "at_tok.h"
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
+
+
+/** *p_out returns count of given character (needle) in given string (p_in). */
+int at_tok_charcounter(char *p_in, char needle, int *p_out)
+{
+    char *p_cur = p_in;
+    int num_found = 0;
+
+    if (p_in == NULL)
+        return -1;
+
+    while (*p_cur != '\0') {
+        if (*p_cur == needle) {
+            num_found++;
+        }
+
+        p_cur++;
+    }
+
+    *p_out = num_found;
+    return 0;
+}
 
 /**
  * Starts tokenizing an AT response string

@@ -2988,6 +2988,246 @@ error:
     goto finally;
 }
 
+/**
+ * RIL_REQUEST_SET_NETWORK_SELECTION_AUTOMATIC
+ *
+ * Specify that the network should be selected automatically.
+ */
+void requestSetNetworkSelectionAutomatic(void *data, size_t datalen,
+                                         RIL_Token t)
+{
+    int err = 0;
+
+    err = at_send_command("AT+COPS=0", NULL);
+    if (err < 0)
+        goto error;
+
+    RIL_onRequestComplete(t, RIL_E_SUCCESS, NULL, 0);
+    return;
+
+error:
+    RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
+    return;
+}
+
+/**
+ * RIL_REQUEST_SET_NETWORK_SELECTION_MANUAL
+ *
+ * Manually select a specified network.
+ *
+ * The radio baseband/RIL implementation will try to camp on the manually
+ * selected network regardless of coverage, i.e. there is no fallback to
+ * automatic network selection.
+ */
+void requestSetNetworkSelectionManual(void *data, size_t datalen,
+                                      RIL_Token t)
+{
+    /*
+     * AT+COPS=[<mode>[,<format>[,<oper>[,<AcT>]]]]
+     *    <mode>   = 1 = Manual (<oper> field shall be present and AcT
+     *                   optionally)
+     *    <format> = 2 = Numeric <oper>, the number has structure:
+     *                   (country code digit 3)(country code digit 2)
+     *                   (country code digit 1)(network code digit 2)
+     *                   (network code digit 1)
+     */
+
+    int err = 0;
+    char *cmd = NULL;
+    ATResponse *atresponse = NULL;
+    const char *mccMnc = (const char *) data;
+
+    /* Check inparameter. */
+    if (mccMnc == NULL)
+        goto error;
+    /* Build and send command. */
+    asprintf(&cmd, "AT+COPS=1,2,\"%s\"", mccMnc);
+    err = at_send_command(cmd, &atresponse);
+    if (err < 0 || atresponse->success == 0)
+        goto error;
+
+    RIL_onRequestComplete(t, RIL_E_SUCCESS, NULL, 0);
+finally:
+
+    at_response_free(atresponse);
+
+    if (cmd != NULL)
+        free(cmd);
+
+    return;
+
+error:
+    RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
+    goto finally;
+}
+
+/*
+ * The parameters of the response to RIL_REQUEST_QUERY_AVAILABLE_NETWORKS are
+ * defined in ril.h
+ */
+#define QUERY_NW_NUM_PARAMS 4
+
+/**
+ * RIL_REQUEST_QUERY_AVAILABLE_NETWORKS
+ *
+ * Scans for available networks.
+ */
+void requestQueryAvailableNetworks(void *data, size_t datalen, RIL_Token t)
+{
+    /*
+     * AT+COPS=?
+     *   +COPS: [list of supported (<stat>,long alphanumeric <oper>
+     *           ,short alphanumeric <oper>,numeric <oper>[,<AcT>])s]
+     *          [,,(list of supported <mode>s),(list of supported <format>s)]
+     *
+     *   <stat>
+     *     0 = unknown
+     *     1 = available
+     *     2 = current
+     *     3 = forbidden
+     */
+
+    int err = 0;
+    ATResponse *atresponse = NULL;
+    const char *statusTable[] =
+    { "unknown", "available", "current", "forbidden" };
+    char **responseArray = NULL;
+    char *p;
+    int n = 0, i = 0, j = 0, numStoredNetworks = 0;
+    char *s = NULL;
+
+    err = at_send_command_multiline("AT+COPS=?", "+COPS:",
+                                                 &atresponse);
+    if (err < 0 ||
+        atresponse->success == 0 || atresponse->p_intermediates == NULL)
+        goto error;
+
+    p = atresponse->p_intermediates->line;
+
+    /* count number of '('. */
+    err = at_tok_charcounter(p, '(', &n);
+    if (err < 0) goto error;
+
+    /* Allocate array of strings, blocks of 4 strings. */
+    n = n / 3;
+    responseArray = alloca(n * QUERY_NW_NUM_PARAMS * sizeof(char *));
+
+    /* Loop and collect response information into the response array. */
+    for (i = 0; i < n; i++) {
+        int status = 0;
+        char *line = NULL;
+        char *longAlphaNumeric = NULL;
+        char *shortAlphaNumeric = NULL;
+        char *numeric = NULL;
+        char *remaining = NULL;
+        int continueOuterLoop = 0;
+
+        s = line = getFirstElementValue(p, "(", ")", &remaining);
+        p = remaining;
+
+        if (line == NULL) {
+            LOGE("Null pointer while parsing COPS response. This should not "
+                 "happen.");
+            goto error;
+        }
+        /* <stat> */
+        err = at_tok_nextint(&line, &status);
+        if (err < 0)
+            goto error;
+
+        /* long alphanumeric <oper> */
+        err = at_tok_nextstr(&line, &longAlphaNumeric);
+        if (err < 0)
+            goto error;
+
+        /* short alphanumeric <oper> */
+        err = at_tok_nextstr(&line, &shortAlphaNumeric);
+        if (err < 0)
+            goto error;
+
+        /* numeric <oper> */
+        err = at_tok_nextstr(&line, &numeric);
+        if (err < 0)
+            goto error;
+
+        /*
+         * The response of AT+COPS=? returns GSM networks and WCDMA networks as
+         * separate network search hits. The RIL API does not support network
+         * type parameter and the RIL must prevent duplicates.
+         */
+        for (j = numStoredNetworks - 1; j >= 0; j--)
+            if (strcmp(responseArray[j * QUERY_NW_NUM_PARAMS + 2],
+                       numeric) == 0) {
+                LOGI("%s(): Skipped storing duplicate operator: %s.",
+                     __func__, longAlphaNumeric);
+                continueOuterLoop = 1;
+                break;
+            }
+
+        if (continueOuterLoop) {
+            free(s);
+            s = NULL;
+            continue; /* Skip storing this duplicate operator */
+        }
+
+        responseArray[numStoredNetworks * QUERY_NW_NUM_PARAMS + 0] =
+            alloca(strlen(longAlphaNumeric) + 1);
+        strcpy(responseArray[numStoredNetworks * QUERY_NW_NUM_PARAMS + 0],
+                             longAlphaNumeric);
+
+        responseArray[numStoredNetworks * QUERY_NW_NUM_PARAMS + 1] =
+            alloca(strlen(shortAlphaNumeric) + 1);
+        strcpy(responseArray[numStoredNetworks * QUERY_NW_NUM_PARAMS + 1],
+                             shortAlphaNumeric);
+
+        responseArray[numStoredNetworks * QUERY_NW_NUM_PARAMS + 2] =
+            alloca(strlen(numeric) + 1);
+        strcpy(responseArray[numStoredNetworks * QUERY_NW_NUM_PARAMS + 2],
+               numeric);
+
+        /* Add status */
+        responseArray[numStoredNetworks * QUERY_NW_NUM_PARAMS + 3] =
+            alloca(strlen(statusTable[status]) + 1);
+        sprintf(responseArray[numStoredNetworks * QUERY_NW_NUM_PARAMS + 3],
+                "%s", statusTable[status]);
+
+        numStoredNetworks++;
+        free(s);
+        s = NULL;
+
+        /* bypass the mode and format list   */
+        s = line = getFirstElementValue(p, "(", ")", &remaining);
+        if (line == NULL) {
+            LOGE("Null pointer while parsing COPS response. This should not "
+                 "happen.");
+            break;
+        }
+        free(s);
+        s = NULL;
+
+        s = line = getFirstElementValue(p, "(", ")", &remaining);
+        if (line == NULL) {
+            LOGE("Null pointer while parsing COPS response. This should not "
+                 "happen.");
+            break;
+        }
+        free(s);
+        s = NULL;
+    }
+
+    RIL_onRequestComplete(t, RIL_E_SUCCESS, responseArray, numStoredNetworks *
+                          QUERY_NW_NUM_PARAMS * sizeof(char *));
+
+finally:
+    at_response_free(atresponse);
+    return;
+
+error:
+    free(s);
+    RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
+    goto finally;
+}
+
 
 /*** Callback methods from the RIL library to us ***/
 
@@ -3229,10 +3469,6 @@ onRequest (int request, void *data, size_t datalen, RIL_Token t)
             at_response_free(p_response);
             break;
 
-        case RIL_REQUEST_SET_NETWORK_SELECTION_AUTOMATIC:
-            at_send_command("AT+COPS=0", NULL);
-            break;
-
         case RIL_REQUEST_DATA_CALL_LIST:
             requestDataCallList(data, datalen, t);
             break;
@@ -3419,6 +3655,18 @@ onRequest (int request, void *data, size_t datalen, RIL_Token t)
 
         case RIL_REQUEST_SET_UNSOL_CELL_INFO_LIST_RATE:
             requestSetCellInfoListRate(data, datalen, t);
+            break;
+
+        case RIL_REQUEST_SET_NETWORK_SELECTION_MANUAL:
+            requestSetNetworkSelectionManual(data, datalen, t);
+            break;
+
+        case RIL_REQUEST_SET_NETWORK_SELECTION_AUTOMATIC:
+            requestSetNetworkSelectionAutomatic(data, datalen, t);
+            break;
+
+        case RIL_REQUEST_QUERY_AVAILABLE_NETWORKS:
+            requestQueryAvailableNetworks(data, datalen, t);
             break;
 
         default:
