@@ -775,7 +775,7 @@ static void requestOrSendDataCallList(RIL_Token *t)
                 const char* separator = " ";
                 const int   dnslist_sz = 128;
                 char*       dnslist = alloca(dnslist_sz);
-                char  propName[PROP_NAME_MAX];
+                char  propName[PROP_VALUE_MAX];
                 memset(dnslist, 0, 128);
                 property_get("net.ppp0.dns1", propName, "8.8.8.8");
                 strlcat(dnslist, propName, dnslist_sz);
@@ -3556,20 +3556,13 @@ onRequest (int request, void *data, size_t datalen, RIL_Token t)
                     RIL_onRequestComplete(t, RIL_E_SUCCESS, &tech, sizeof(tech));
             }
             break;
+
         case RIL_REQUEST_SET_PREFERRED_NETWORK_TYPE:
             requestSetPreferredNetworkType(request, data, datalen, t);
             break;
 
         case RIL_REQUEST_GET_PREFERRED_NETWORK_TYPE:
             requestGetPreferredNetworkType(request, data, datalen, t);
-            break;
-
-        case RIL_REQUEST_GET_CELL_INFO_LIST:
-            requestGetCellInfoList(data, datalen, t);
-            break;
-
-        case RIL_REQUEST_SET_UNSOL_CELL_INFO_LIST_RATE:
-            requestSetCellInfoListRate(data, datalen, t);
             break;
 
         /* CDMA Specific Requests */
