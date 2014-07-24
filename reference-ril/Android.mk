@@ -3,7 +3,7 @@
 # XXX using libutils for simulator build only...
 #
 ifneq ($(PREBUILT_3G_MODEM_RIL),true)
-ifeq ($(BOARD_HAVE_MODEM),true)
+ifneq ($(BOARD_NOT_HAVE_MODEM),true)
 
 LOCAL_PATH:= $(call my-dir)
 include $(CLEAR_VARS)
