@@ -155,10 +155,11 @@ int main(int argc, char **argv)
 		case HUAWEI_MODEM:
 		case AMAZON_MODEM:
 		default:
-		rilLibPath = REFERENCE_RIL_DEF_PATH;
+			if (!rilLibPath)
+				rilLibPath = REFERENCE_RIL_DEF_PATH;
 		break;
     }
-
+	RLOGE("ril lib path=%s\n", rilLibPath);
     if (rilLibPath == NULL) {
         if ( 0 == property_get(LIB_PATH_PROPERTY, libPath, NULL)) {
             // No lib sepcified on the command line, and nothing set in props.
