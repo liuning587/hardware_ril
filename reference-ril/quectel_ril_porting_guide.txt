@@ -1,0 +1,62 @@
+1. Linux Kernel Configure by "make menuconfig"
+  1.1 USB Driver Configure for UC15/UC20/EC20
+    Device Drivers  --->
+      [*] USB support  --->
+        <*> USB Serial Converter support
+          [*] USB Generic Serail Driver
+          [*] USB Driver for GSM and CMDA modems
+          
+    add UC15/UC20/EC20 's Vendor ID and Product ID in option_ids[] of drivers/usb/serial/option.c
+	static const struct usb_device_id option_ids[] = {
+		{ USB_DEVICE(0x05C6, 0x9090) },  //for UC15
+		{ USB_DEVICE(0x05C6, 0x9003) },  //for UC20
+		{ USB_DEVICE(0x05C6, 0x9215) },  //for EC20
+		
+  1.2 USB Driver Configure for UG95/UG96
+    Device Drivers  --->
+      [*] USB support  --->
+        <*> USB Modem (CDC ACM) support
+  
+  1.3 PPP Configure
+    Device Drivers  --->
+      [*] Network device support  --->
+        <*> PPP (point-to-point protocol) support
+        <*> PPP support for async serial ports
+        <*> PPP support for sync tty ports
+        <*> PPP Deflate compression
+
+2. init.rc Configure
+  add service ril-daemon and service quectel-pppd in init.rc, as below:
+  service ril-daemon /system/bin/rild -l /system/lib/libreference-ril.so
+    class main
+    socket rild stream 660 root radio 
+    socket rild-debug stream 666 radio system 
+    user root 
+    group radio cache inet misc audio sdcard_rw log
+
+  the init.rc 's location depend on your project, for example:
+    system/core/rootdir/init.rc
+    device/fsl/imx6/init.rc
+    device/ti/am335xevm_sk/init.am335xevm.rc
+    device/generic/x86/init.rc
+    device/samsung/smdkv210/init.rc
+    
+3. modifying the Right of service ril-daemon
+    serivce ril-daemon require root privilege. 
+    comment out the function switchUser() in the file hardware/ril/rild/rild.c. as below:
+    OpenLib:
+    #endif
+      //switchUser();
+      
+4. extract Quectel's reference-ril.zip to hardware/ril/reference-ril/
+
+5. re-build your android source code
+
+6. check Quectel's RIL output files
+		system/bin/rild <-> hardware/ril/rild/
+		system/bin/pppd <-> external/ppp/pppd/	
+		system/bin/chat <-> hardware/ril/reference-ril/
+		system/lib/libreference-ril.so <-> hardware/ril/reference-ril/
+		system/etc/ppp/ip-down <-> hardware/ril/reference-ril/
+		system/etc/ppp/ip-up <-> hardware/ril/reference-ril/
+

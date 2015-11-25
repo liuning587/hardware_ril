@@ -14,12 +14,10 @@
 ** See the License for the specific language governing permissions and
 ** limitations under the License.
 */
-/* Copyright (C) 2011-2014 Freescale Semiconductor, Inc. */
 
 #include "atchannel.h"
 #include "at_tok.h"
 
-#include <cutils/sockets.h>
 #include <stdio.h>
 #include <string.h>
 #include <pthread.h>
@@ -30,15 +28,32 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
-#include <sys/un.h>
-#include <netinet/in.h>
-#include <linux/if.h>
 
-#undef LOG_NDEBUG
 #define LOG_NDEBUG 0
-#undef LOG_TAG
 #define LOG_TAG "AT"
 #include <utils/Log.h>
+
+#if 1 //quectel PLATFORM_VERSION >= "4.2.2"
+#ifndef LOGD
+#define LOGD ALOGD
+#endif
+#ifndef LOGE
+#define LOGE ALOGE
+#endif
+#ifndef LOGI
+#define LOGI ALOGI
+#endif
+#endif
+
+#if 1 //quectel
+#undef HAVE_ANDROID_OS
+#define USE_NP 1
+#endif
+
+#ifdef HAVE_ANDROID_OS
+/* for IOCTL's */
+#include <linux/omap_csmi.h>
+#endif /*HAVE_ANDROID_OS*/
 
 #include "misc.h"
 
@@ -51,11 +66,9 @@
 
 #define MAX_AT_RESPONSE (8 * 1024)
 #define HANDSHAKE_RETRY_COUNT 8
-#define HANDSHAKE_TIMEOUT_MSEC 250
+#define HANDSHAKE_TIMEOUT_MSEC 500 //250
 
 static pthread_t s_tid_reader;
-static pthread_t s_tid_pppcheck;
-
 static int s_fd = -1;    /* fd of the AT channel */
 static ATUnsolHandler s_unsolHandler;
 
@@ -64,6 +77,8 @@ static ATUnsolHandler s_unsolHandler;
 static char s_ATBuffer[MAX_AT_RESPONSE+1];
 static char *s_ATBufferCur = s_ATBuffer;
 
+static int s_ackPowerIoctl; /* true if TTY has android byte-count
+                                handshake for low power*/
 static int s_readCount = 0;
 
 #if AT_DEBUG
@@ -71,7 +86,7 @@ void  AT_DUMP(const char*  prefix, const char*  buff, int  len)
 {
     if (len < 0)
         len = strlen(buff);
-    RLOGD("%.*s", len, buff);
+    LOGD("%.*s", len, buff);
 }
 #endif
 
@@ -207,9 +222,12 @@ static int isFinalResponse(const char *line)
  * SMS unsolicited response
  */
 static const char * s_smsUnsoliciteds[] = {
-    "+CMT:",
+   "+CMT:",
     "+CDS:",
     "+CBM:"
+#if 1 //quectel
+    , "+CMTI:"
+#endif
 };
 static int isSMSUnsolicited(const char *line)
 {
@@ -287,22 +305,18 @@ static void processLine(const char *line)
             if (strStartsWith (line, s_responsePrefix)) {
                 addIntermediate(line);
             } else {
-                //handle the case of read sms
-                //<CR><LF>+CMGR:
-                //<stat>,[<reserved>],<length><CR><LF><pdu><CR><LF><C
-                //R><LF>OK<CR><LF>
-                if(!strcmp(s_responsePrefix,"+CMGR:")&& sp_response->p_intermediates && sp_response->p_intermediates->line ) {
-                    addIntermediate(line);
-                }
-                else{
-                    handleUnsolicited(line);
-                }
-                
+                handleUnsolicited(line);
             }
         break;
 
+#if 1 //quectel
+        case OEM_HOOK_STRINGS:
+            addIntermediate(line);
+        break;
+  #endif
+
         default: /* this should never be reached */
-            RLOGE("Unsupported AT command type %d\n", s_type);
+            LOGE("Unsupported AT command type %d\n", s_type);
             handleUnsolicited(line);
         break;
     }
@@ -383,7 +397,7 @@ static const char *readline()
 
     while (p_eol == NULL) {
         if (0 == MAX_AT_RESPONSE - (p_read - s_ATBuffer)) {
-            RLOGE("ERROR: Input line exceeded buffer\n");
+            LOGE("ERROR: Input line exceeded buffer\n");
             /* ditch buffer and start over again */
             s_ATBufferCur = s_ATBuffer;
             *s_ATBufferCur = '\0';
@@ -410,9 +424,9 @@ static const char *readline()
         } else if (count <= 0) {
             /* read error encountered or EOF reached */
             if(count == 0) {
-                RLOGD("atchannel: EOF reached");
+                LOGD("atchannel: EOF reached");
             } else {
-                RLOGD("atchannel: read error %s", strerror(errno));
+                LOGD("atchannel: read error %s", strerror(errno));
             }
             return NULL;
         }
@@ -425,13 +439,14 @@ static const char *readline()
     s_ATBufferCur = p_eol + 1; /* this will always be <= p_read,    */
                               /* and there will be a \0 at *p_read */
 
-    RLOGD("AT< %s\n", ret);
+    LOGD("AT< %s\n", ret);
     return ret;
 }
 
 
 static void onReaderClosed()
 {
+    LOGE("%s\n", __func__);
     if (s_onReaderClosed != NULL && s_readerClosed == 0) {
 
         pthread_mutex_lock(&s_commandmutex);
@@ -444,82 +459,6 @@ static void onReaderClosed()
 
         s_onReaderClosed();
     }
-}
-
-#define MAX_PPPD_MSG_LEN (32)
-#define PPPD_MSG_PPP_DOWN "ppp-down"
-
-#define SOCKET_NAME_RIL_PPP "rild-ppp"
-
-extern void onDeactiveDataCallList();
-
-static void *pppcheckLoop(void *arg)
-{
-    int acceptFD;
-    struct sockaddr_un peeraddr;
-    socklen_t socklen = sizeof (peeraddr);
-    int number;
-    int s_fdPPP;
-    char buf[MAX_PPPD_MSG_LEN];
-    int ret;
-
-    LOGD("pppcheckLoop start");
-    s_fdPPP = android_get_control_socket(SOCKET_NAME_RIL_PPP);
-    if (s_fdPPP < 0) {
-        LOGE("Failed to get socket '" SOCKET_NAME_RIL_PPP "' errno:%d", errno);
-        exit(-1);
-    }
-
-    for (;;) {
-        //Check pppd is alive or not
-        //Watch the ppp-down msg
-        //Raise a unsolict cmd to RILJ
-        LOGD("pppcheckLoop listen s_fdPPP");
-        ret = listen(s_fdPPP, 4);
-
-        if (ret < 0) {
-            LOGE("Failed to listen on ril ppp socket '%d': %s",
-             s_fdPPP, strerror(errno));
-            close(s_fdPPP);
-            return NULL;
-        }
-
-        LOGD("pppcheckLoop start accept s_fdPPP");
-        acceptFD = accept (s_fdPPP,  (struct sockaddr *) &peeraddr, &socklen);
-        if (acceptFD < 0) {
-            LOGE ("error accepting on ppp port: %d\n", errno);
-            close(acceptFD);
-            close(s_fdPPP);
-            return NULL;
-        }
-
-        LOGD("pppcheckLoop end accept s_fdPPP");
-        memset(buf, 0, MAX_PPPD_MSG_LEN);
-        if (recv(acceptFD, buf, MAX_PPPD_MSG_LEN, 0) <= 0) {
-            LOGE ("error reading on socket: ppp msg: \n");
-            close(acceptFD);
-            close(s_fdPPP);
-            return NULL;
-        }
-
-        //Big-endian/little-endian handling?
-        LOGD("ppp msg: %s",buf);
-        if(strcmp(buf,PPPD_MSG_PPP_DOWN) == 0) {
-            //Process ppp down here
-            //Since it will schedule the unsolicit handler
-            //Make a lock of s_commandmutex for different thread access for 
-            //unsolicit handler
-            pthread_mutex_lock(&s_commandmutex);
-            onDeactiveDataCallList();
-            pthread_mutex_unlock(&s_commandmutex);
-        }
-        LOGD("*****pppcheckLoop one process end*****");
-        close(acceptFD);
-    }
-	
-	//close the socket
-	close(s_fdPPP);
-	return NULL;
 }
 
 
@@ -555,6 +494,14 @@ static void *readerLoop(void *arg)
         } else {
             processLine(line);
         }
+
+#ifdef HAVE_ANDROID_OS
+        if (s_ackPowerIoctl > 0) {
+            /* acknowledge that bytes have been read and processed */
+            ioctl(s_fd, OMAP_CSMI_TTY_ACK, &s_readCount);
+            s_readCount = 0;
+        }
+#endif /*HAVE_ANDROID_OS*/
     }
 
     onReaderClosed();
@@ -574,14 +521,23 @@ static int writeline (const char *s)
     size_t cur = 0;
     size_t len = strlen(s);
     ssize_t written;
+    static char at_command[64];
 
     if (s_fd < 0 || s_readerClosed > 0) {
         return AT_ERROR_CHANNEL_CLOSED;
     }
 
-    RLOGD("AT> %s\n", s);
+    LOGD("AT> %s\n", s);
 
     AT_DUMP( ">> ", s, strlen(s) );
+
+#if 1 //Quectel send '\r' maybe fail via USB controller: Intel Corporation 7 Series/C210 Series Chipset Family USB xHCI Host Controller (rev 04)
+    if (len < (sizeof(at_command) - 1)) {
+        strcpy(at_command, s);
+        at_command[len++] = '\r';
+        s = (const char *)at_command;
+    }
+#endif
 
     /* the main string */
     while (cur < len) {
@@ -595,6 +551,12 @@ static int writeline (const char *s)
 
         cur += written;
     }
+
+#if 1 //Quectel send '\r' maybe fail via USB controller: Intel Corporation 7 Series/C210 Series Chipset Family USB xHCI Host Controller (rev 04)
+    if (s == (const char *)at_command) {
+        return 0;
+    }
+#endif
 
     /* the \r  */
 
@@ -618,7 +580,7 @@ static int writeCtrlZ (const char *s)
         return AT_ERROR_CHANNEL_CLOSED;
     }
 
-    RLOGD("AT> %s^Z\n", s);
+    LOGD("AT> %s^Z\n", s);
 
     AT_DUMP( ">* ", s, strlen(s) );
 
@@ -677,6 +639,40 @@ int at_open(int fd, ATUnsolHandler h)
     s_responsePrefix = NULL;
     s_smsPDU = NULL;
     sp_response = NULL;
+    
+    /* Android power control ioctl */
+#ifdef HAVE_ANDROID_OS
+#ifdef OMAP_CSMI_POWER_CONTROL
+    ret = ioctl(fd, OMAP_CSMI_TTY_ENABLE_ACK);
+    if(ret == 0) {
+        int ack_count;
+		int read_count;
+        int old_flags;
+        char sync_buf[256];
+        old_flags = fcntl(fd, F_GETFL, 0);
+        fcntl(fd, F_SETFL, old_flags | O_NONBLOCK);
+        do {
+            ioctl(fd, OMAP_CSMI_TTY_READ_UNACKED, &ack_count);
+			read_count = 0;
+            do {
+                ret = read(fd, sync_buf, sizeof(sync_buf));
+				if(ret > 0)
+					read_count += ret;
+            } while(ret > 0 || (ret < 0 && errno == EINTR));
+            ioctl(fd, OMAP_CSMI_TTY_ACK, &ack_count);
+         } while(ack_count > 0 || read_count > 0);
+        fcntl(fd, F_SETFL, old_flags);
+        s_readCount = 0;
+        s_ackPowerIoctl = 1;
+    }
+    else
+        s_ackPowerIoctl = 0;
+
+#else // OMAP_CSMI_POWER_CONTROL
+    s_ackPowerIoctl = 0;
+
+#endif // OMAP_CSMI_POWER_CONTROL
+#endif /*HAVE_ANDROID_OS*/
 
     pthread_attr_init (&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -684,19 +680,11 @@ int at_open(int fd, ATUnsolHandler h)
     ret = pthread_create(&s_tid_reader, &attr, readerLoop, &attr);
 
     if (ret < 0) {
+        LOGE("readerLoop create fail!");
         perror ("pthread_create");
         return -1;
     }
 
-    pthread_attr_init (&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-
-    ret = pthread_create(&s_tid_pppcheck, &attr, pppcheckLoop, &attr);
-
-    if (ret < 0) {
-        perror ("pthread_create");
-        return -1;
-    }
 
     return 0;
 }
@@ -704,6 +692,7 @@ int at_open(int fd, ATUnsolHandler h)
 /* FIXME is it ok to call this from the reader and the command thread? */
 void at_close()
 {
+    LOGE("at_close");
     if (s_fd >= 0) {
         close(s_fd);
     }
@@ -773,6 +762,40 @@ static void reverseIntermediates(ATResponse *p_response)
  * timeoutMsec == 0 means infinite timeout
  */
 
+#if 1 //quectel
+#define ARRAY_SIZE(a) (sizeof(a)/sizeof(a[0]))
+
+typedef struct {
+    const char *at;
+    unsigned int timeoutSec;
+} AT_TIMEOUT_T;
+
+static const AT_TIMEOUT_T ql_at_timeout_table[] = {
+    {"AT+COPS", 180},
+    {"AT+CMGS", 30},
+};
+
+static long long ql_get_at_timeout(const char *command) {
+    size_t i;
+    char tmp[20];
+    long long timeoutMsec = 15 * 1000; //default 15s
+
+    memset(tmp, 0, sizeof(tmp));
+    strncpy(tmp, command, sizeof(tmp) - 1);
+    for (i = 0; i < strlen(tmp); i++)
+        tmp[i] = toupper(tmp[i]);
+
+     for(i = 0; i <  ARRAY_SIZE(ql_at_timeout_table); i++) {
+        if(!strncmp(tmp, ql_at_timeout_table[i].at, strlen(ql_at_timeout_table[i].at))) {
+            timeoutMsec = ql_at_timeout_table[i].timeoutSec * 1000;
+            break;
+        }
+    }  
+
+    return timeoutMsec;
+}
+#endif
+
 static int at_send_command_full_nolock (const char *command, ATCommandType type,
                     const char *responsePrefix, const char *smspdu,
                     long long timeoutMsec, ATResponse **pp_outResponse)
@@ -781,6 +804,13 @@ static int at_send_command_full_nolock (const char *command, ATCommandType type,
 #ifndef USE_NP
     struct timespec ts;
 #endif /*USE_NP*/
+
+//joe
+#if 1 //quectel // AT_TIMEOUT_LVL
+    if(timeoutMsec == 0) {        
+        timeoutMsec = ql_get_at_timeout(command);
+    }
+#endif
 
     if(sp_response != NULL) {
         err = AT_ERROR_COMMAND_PENDING;
@@ -975,7 +1005,6 @@ int at_send_command_multiline (const char *command,
 
     return err;
 }
-
 
 /** This callback is invoked on the command thread */
 void at_set_on_timeout(void (*onTimeout)(void))
