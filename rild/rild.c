@@ -305,9 +305,13 @@ OpenLib:
         property_get(LIB_ARGS_PROPERTY, args, "");
         argc = make_argv(args, rilArgv);
     }
-
     // Make sure there's a reasonable argv[0]
     rilArgv[0] = argv[0];
+    {
+	int c = 0;
+	for (c = 0; c < argc; c++)
+	    RLOGE("arg%d: %s\n", c, rilArgv[c]);
+    }
     funcs = rilInit(&s_rilEnv, argc, rilArgv);
 
     RIL_register(funcs);
