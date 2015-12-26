@@ -121,6 +121,22 @@ static struct modem_3g_device modem_3g_device_table[] = {
 		.dataport	= "/dev/ttyUSB2",
 		.type		= ZTE_MODEM,
 	},
+	{
+		.name		= "EC20",
+		.idVendor	= "05C6",
+		.idProduct	= "9215",
+		.deviceport     = "NOTUSED",
+		.dataport	= "NOTUSED",
+		.type		= EC20_MODEM,
+	},
+	{
+		.name		= "MC9090",
+		.idVendor	= "1199",
+		.idProduct	= "9011",
+		.deviceport     = "NOTUSED",
+		.dataport	= "NOTUSED",
+		.type		= MC9090_MODEM,
+	},
 };
 
 /* -------------------------------------------------------------- */
