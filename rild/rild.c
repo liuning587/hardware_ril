@@ -39,9 +39,13 @@
 #define LIB_PATH_PROPERTY   "rild.libpath"
 #define LIB_ARGS_PROPERTY   "rild.libargs"
 #define MAX_LIB_ARGS        16
-#define MAX_POLL_DEVICE_CNT 8
+#define MAX_POLL_DEVICE_CNT 160
 #define REFERENCE_RIL_DEF_PATH "/system/lib/libreference-ril.so"
 #define REFERENCE_RIL_ZTE_PATH "/system/lib/libreference-ril-zte.so"
+#define REFERENCE_RIL_MC9090_AT_PATH "/system/lib/libsierraat-ril.so"
+#define REFERENCE_RIL_MC9090_QMI_PATH "/system/lib/libsierra-ril.so"
+#define REFERENCE_RIL_MC9090_HL_PATH "/system/lib/libsierrahl-ril.so"
+#define MC9090_PROP_NAME "mc9090.work_type"
 static void usage(const char *argv0)
 {
     fprintf(stderr, "Usage: %s -l <ril impl library> [-- <args for impl library>]\n", argv0);
@@ -109,6 +113,7 @@ int main(int argc, char **argv)
     const RIL_RadioFunctions *(*rilInit)(const struct RIL_Env *, int, char **);
     const RIL_RadioFunctions *funcs;
     char libPath[PROPERTY_VALUE_MAX];
+	char workType[PROPERTY_VALUE_MAX];
     unsigned char hasLibArgs = 0;
     int modem_type = UNKNOWN_MODEM;
     int i;
@@ -128,20 +133,21 @@ int main(int argc, char **argv)
     }
 
     //Wait for device ready.
-    if (rilLibPath == NULL) {
+    if (1/*rilLibPath == NULL*/) {
 		while(UNKNOWN_MODEM == modem_type){
 		    modem_type = runtime_3g_port_type();
-		    ALOGD("Couldn't find proper modem, retrying...");
+		    ALOGD("Couldn't find proper modem, retrying...%d", modem_type);
 		    s_poll_device_cnt++;
 		    if (s_poll_device_cnt > MAX_POLL_DEVICE_CNT){
 				/*
 				*Maybe no device right now, start to monitor
 				*hotplug event later.
 				*/
-				start_uevent_monitor();
-				goto done;
+				//start_uevent_monitor();
+				//goto done;
+				break;
 		    }
-		    sleep(5);
+		    sleep(1);
 		}
     }
 
@@ -151,7 +157,19 @@ int main(int argc, char **argv)
 		case ZTE_MODEM:
 		rilLibPath = REFERENCE_RIL_ZTE_PATH;
 		break;
-
+		case MC9090_MODEM:
+		workType[0] = '\0';
+		if ( 0 != property_get(MC9090_PROP_NAME, workType, "at"))
+		{
+			if (!strcmp(workType, "qmi"))
+				rilLibPath = REFERENCE_RIL_MC9090_QMI_PATH;
+			if (!strcmp(workType, "hl"))
+				rilLibPath = REFERENCE_RIL_MC9090_QMI_PATH;			
+		}
+		else
+			rilLibPath = REFERENCE_RIL_MC9090_AT_PATH;
+		RLOGE("ril worktype =%s\n", workType);
+		break;
 		case HUAWEI_MODEM:
 		case AMAZON_MODEM:
 		default:
@@ -305,6 +323,18 @@ OpenLib:
         property_get(LIB_ARGS_PROPERTY, args, "");
         argc = make_argv(args, rilArgv);
     }
+	if (modem_type == MC9090_MODEM){
+		argc = 4;
+		if (!strcmp(workType, "qmi")){
+			rilArgv[1] = "-a";
+			rilArgv[2] = "-i";
+			rilArgv[3] = "usb0";
+		}else{
+			rilArgv[1] = "-a";
+			rilArgv[2] = "-i";
+			rilArgv[3] = "wwan0";
+		}
+	}
     // Make sure there's a reasonable argv[0]
     rilArgv[0] = argv[0];
     {
