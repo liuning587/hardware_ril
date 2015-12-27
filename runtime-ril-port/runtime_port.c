@@ -132,7 +132,7 @@ static struct modem_3g_device modem_3g_device_table[] = {
 	{
 		.name		= "MC9090",
 		.idVendor	= "1199",
-		.idProduct	= "9011",
+		.idProduct	= "68a3",
 		.deviceport     = "NOTUSED",
 		.dataport	= "NOTUSED",
 		.type		= MC9090_MODEM,

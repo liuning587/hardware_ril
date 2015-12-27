@@ -2,6 +2,7 @@
 
 # XXX using libutils for simulator build only...
 #
+ifneq ($(BOARD_MODEM_VENDOR), MC9090)
 LOCAL_PATH:= $(call my-dir)
 $(shell touch $(LOCAL_PATH)/*)
 include $(CLEAR_VARS)
@@ -77,3 +78,4 @@ LOCAL_MODULE_TAGS:=eng optional
 LOCAL_MODULE_PATH:= $(TARGET_OUT_ETC)/ppp
 LOCAL_MODULE:= ip-down
 include $(BUILD_EXECUTABLE)
+endif
