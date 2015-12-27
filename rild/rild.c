@@ -159,13 +159,12 @@ int main(int argc, char **argv)
 		break;
 		case MC9090_MODEM:
 		workType[0] = '\0';
-		if ( 0 != property_get(MC9090_PROP_NAME, workType, "at"))
-		{
-			if (!strcmp(workType, "qmi"))
-				rilLibPath = REFERENCE_RIL_MC9090_QMI_PATH;
-			if (!strcmp(workType, "hl"))
-				rilLibPath = REFERENCE_RIL_MC9090_QMI_PATH;			
-		}
+		property_get(MC9090_PROP_NAME, workType, "at");
+
+		if (!strcmp(workType, "qmi"))
+			rilLibPath = REFERENCE_RIL_MC9090_QMI_PATH;
+		else if (!strcmp(workType, "hl"))
+			rilLibPath = REFERENCE_RIL_MC9090_QMI_PATH;			
 		else
 			rilLibPath = REFERENCE_RIL_MC9090_AT_PATH;
 		RLOGE("ril worktype =%s\n", workType);
