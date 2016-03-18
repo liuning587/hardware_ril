@@ -294,8 +294,9 @@ int main(int argc, char **argv)
     }
 OpenLib:
 #endif
+#ifndef MODEM_EC20
     switchUser();
-
+#endif
     dlHandle = dlopen(rilLibPath, RTLD_NOW);
 
     if (dlHandle == NULL) {
